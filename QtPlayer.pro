@@ -1,6 +1,7 @@
 QT       += core gui
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+QT       += opengl openglwidgets
 
 CONFIG += c++17
 
@@ -11,15 +12,11 @@ CONFIG += c++17
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
-    qwindowkit/include/widgetframe/windowbar.cpp \
-    qwindowkit/include/widgetframe/windowbutton.cpp
+    yuvvideowidget.cpp
 
 HEADERS += \
     mainwindow.h \
-    qwindowkit/include/widgetframe/windowbar.h \
-    qwindowkit/include/widgetframe/windowbar_p.h \
-    qwindowkit/include/widgetframe/windowbutton.h \
-    qwindowkit/include/widgetframe/windowbutton_p.h
+    yuvvideowidget.h
 
 FORMS += \
     mainwindow.ui
@@ -30,8 +27,9 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
 include("qwindowkit/etc/share/qmake/QWKWidgets.pri")
+include("windowbar/windowbar.pri")
 
 message($$join(INCLUDEPATH, " "))
 
 RESOURCES += \
-    qtplayer.qrc
+    skin/skin.qrc

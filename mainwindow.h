@@ -21,8 +21,27 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+    enum Theme {
+        Dark,
+        Light,
+    };
+    Q_ENUM(Theme)
+
+Q_SIGNALS:
+    void themeChanged();
+
+protected:
+    bool event(QEvent *event) override;
+
+    void closeEvent(QCloseEvent *event) override;
+
+private:
+    void installWindowAgent();
 private:
     Ui::MainWindow *ui;
      QWK::WidgetWindowAgent *windowAgent;
+
+    Theme currentTheme{};
+    void loadStyleSheet(Theme theme);
 };
 #endif // MAINWINDOW_H
