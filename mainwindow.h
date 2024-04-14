@@ -35,6 +35,9 @@ protected:
 
     void closeEvent(QCloseEvent *event) override;
 
+private slots:
+    void on_pushButtonList_toggled(bool checked);
+
 private:
     void installWindowAgent();
 private:

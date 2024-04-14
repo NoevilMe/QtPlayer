@@ -17,8 +17,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->setupUi(this);
 
-    ui->pushButtonPlay->setProperty("play-button", true);
-
     ui->openGLWidget->init(1280, 720);
 
     loadStyleSheet(Light);
@@ -212,3 +210,14 @@ void MainWindow::loadStyleSheet(Theme theme) {
 //        Q_EMIT themeChanged();
     }
 }
+
+void MainWindow::on_pushButtonList_toggled(bool checked)
+{
+    if (checked) {
+        ui->listWidgetFiles->hide();
+    }
+    else {
+        ui->listWidgetFiles->show();
+    }
+}
+
