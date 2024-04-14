@@ -156,3 +156,85 @@ QWidget#clock-widget {
     font-weight: bold;
     background-color: transparent;
 }
+
+QWidget#centralwidget QPushButton{
+background:transparent;
+border:none;
+max-width:30px;
+min-width:30px;
+max-height:30px;
+min-height:30px;
+}
+
+QWidget#centralwidget  QPushButton:hover{
+border:1px solid transparent;
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay{
+background:transparent;
+border:none;
+max-width:40px;
+min-width:40px;
+max-height:40px;
+min-height:40px;
+image:url(:/images/Play.png);
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay:hover{
+border:1px solid transparent;
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay:checked{
+image:url(:/images/Pause.png);
+}
+
+QPushButton#pushButtonSlow{
+image:url(:/images/Rewind.png);
+}
+
+QPushButton#pushButtonFast{
+image:url(:/images/Forward.png);
+}
+
+QPushButton#pushButtonList{
+image:url(:/images/Settings.png);
+}
+
+QPushButton#pushButtonPrevious{
+image:url(:/images/Previous.png);
+}
+
+QPushButton#pushButtonNext{
+image:url(:/images/Next.png);
+}
+
+QPushButton#pushButtonStop{
+image:url(:/images/Stop.png);
+}
+
+
+QPushButton#pushButtonVolume{
+image:url(:/images/Volume.png);
+}
+
+QPushButton#pushButtonCircle{
+image:url(:/images/Circle.png);
+min-width: 40px;
+border: none;
+padding: 0;
+background-color: transparent;
+}
+
+QPushButton#ListCirclePlay{
+image:url(:/images/Circle.png);
+}
+QPushButton#SingleCirclePlay{
+image:url(:/images/Circle1.png);
+}
+QPushButton#RandomCirclePlay{
+image:url(:/images/Circle2.png);
+}
+
+QPushButton#pushButtonFullScreen{
+image:url(:/images/Fullscreen.png);
+}

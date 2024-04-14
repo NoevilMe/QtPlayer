@@ -1,4 +1,4 @@
-    # Shared include directory
+# Shared include directory
 
 HEADERS += \
     $$PWD/windowbar.h \

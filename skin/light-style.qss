@@ -1,11 +1,11 @@
 /* Window bar */
 
 QWK--WindowBar[bar-active=true] {
-    background-color: #195ABE;
+    background-color: #32BEA6;
 }
 
 QWK--WindowBar[bar-active=false] {
-    background-color: #195ABE;
+    background-color: #2FB39C;
 }
 
 
@@ -153,4 +153,111 @@ QWidget#clock-widget {
     color: #333333;
     font-weight: bold;
     background-color: transparent;
+}
+
+QSlider::Horizontal{
+background:transparent;
+min-height:20px;
+max-height:20px;
+}
+QSlider::add-page:Horizontal{
+background-color: gray;
+}
+QSlider::sub-page:Horizontal {
+background-color:qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 rgb(255,0,255), stop:0.5 rgb(0,255,255), stop:1 rgb(255,255,0));
+}
+QSlider::groove:Horizontal {
+background:transparent;
+height:5px;
+}
+QSlider::handle:Horizontal {
+background-color:lightgreen;
+width:11px;
+margin: -3px 0px;
+border-radius:5px;
+}
+
+QSlider::handle:Horizontal:hover {
+background-color:red;
+}
+
+
+
+QWidget#centralwidget QPushButton{
+background:transparent;
+border:none;
+max-width:30px;
+min-width:30px;
+max-height:30px;
+min-height:30px;
+}
+
+QWidget#centralwidget  QPushButton:hover{
+border:1px solid transparent;
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay{
+background:transparent;
+border:none;
+max-width:40px;
+min-width:40px;
+max-height:40px;
+min-height:40px;
+image:url(:/images/Play.png);
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay:hover{
+border:1px solid transparent;
+}
+
+QWidget#centralwidget QPushButton#pushButtonPlay:checked{
+image:url(:/images/Pause.png);
+}
+
+QPushButton#pushButtonSlow{
+image:url(:/images/Rewind.png);
+}
+
+QPushButton#pushButtonFast{
+image:url(:/images/Forward.png);
+}
+
+QPushButton#pushButtonList{
+image:url(:/images/Settings.png);
+}
+
+QPushButton#pushButtonPrevious{
+image:url(:/images/Previous.png);
+}
+
+QPushButton#pushButtonNext{
+image:url(:/images/Next.png);
+}
+
+QPushButton#pushButtonStop{
+image:url(:/images/Stop.png);
+}
+
+
+QPushButton#pushButtonVolume{
+image:url(:/images/Volume.png);
+}
+
+
+QPushButton#pushButtonCircle{
+image:url(:/images/Circle.png);
+}
+
+QPushButton#ListCirclePlay{
+image:url(:/images/Circle.png);
+}
+QPushButton#SingleCirclePlay{
+image:url(:/images/Circle1.png);
+}
+QPushButton#RandomCirclePlay{
+image:url(:/images/Circle2.png);
+}
+
+QPushButton#pushButtonFullScreen{
+image:url(:/images/Fullscreen.png);
 }
