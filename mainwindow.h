@@ -4,17 +4,17 @@
 #include <QMainWindow>
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class MainWindow; }
+namespace Ui {
+class MainWindow;
+}
 QT_END_NAMESPACE
 
 namespace QWK {
 class WidgetWindowAgent;
 class StyleAgent;
-}
+} // namespace QWK
 
-
-class MainWindow : public QMainWindow
-{
+class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
@@ -37,14 +37,25 @@ protected:
 
 private slots:
     void on_pushButtonList_toggled(bool checked);
+    void on_pushButtonFullScreen_toggled(bool checked);
 
 private:
     void installWindowAgent();
+
 private:
     Ui::MainWindow *ui;
-     QWK::WidgetWindowAgent *windowAgent;
+    QWK::WidgetWindowAgent *windowAgent;
+
+    // fullscreen
+    QWidget *fsWidget_ = nullptr;
+    QWidget *fsParent_ =nullptr;
+    Qt::WindowFlags fsFlags_;
 
     Theme currentTheme{};
     void loadStyleSheet(Theme theme);
+
+    // QObject interface
+public:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 };
 #endif // MAINWINDOW_H

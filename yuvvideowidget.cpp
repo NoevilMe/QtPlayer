@@ -122,11 +122,11 @@ void YuvVideoWidget::resizeGL(int w, int h) {
 
     //    glViewport(0, h/2, w, h);
 
-    qDebug() << "resizeGL " << w << " x " << h;
+//    qDebug() << "resizeGL " << w << " x " << h;
 }
 
 void YuvVideoWidget::paintGL() {
-    qDebug() << "paintGL " << this->rect();
+//    qDebug() << "paintGL " << this->rect();
 
     //#ifndef GL_SAMPLE
     //    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);

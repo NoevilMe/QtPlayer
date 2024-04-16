@@ -238,3 +238,29 @@ image:url(:/images/Circle2.png);
 QPushButton#pushButtonFullScreen{
 image:url(:/images/Fullscreen.png);
 }
+
+QSlider::Horizontal{
+background:transparent;
+min-height:20px;
+max-height:20px;
+}
+QSlider::add-page:Horizontal{
+background-color: gray;
+}
+QSlider::sub-page:Horizontal {
+background-color:qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 rgb(255,0,255), stop:0.5 rgb(0,255,255), stop:1 rgb(255,255,0));
+}
+QSlider::groove:Horizontal {
+background:transparent;
+height:5px;
+}
+QSlider::handle:Horizontal {
+background-color:lightgreen;
+width:11px;
+margin: -3px 0px;
+border-radius:5px;
+}
+
+QSlider::handle:Horizontal:hover {
+background-color:red;
+}

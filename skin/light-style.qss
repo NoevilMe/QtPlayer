@@ -186,7 +186,6 @@ background-color:red;
 }
 
 
-
 QWidget#centralwidget QPushButton{
 background:transparent;
 border:none;
