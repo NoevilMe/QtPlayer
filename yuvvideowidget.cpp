@@ -98,9 +98,9 @@ void YuvVideoWidget::initializeGL() {
     glClearColor(0.0, 0.0, 0.0, 1.0);
 
     // 启动定时器
-    QTimer *ti = new QTimer(this);
-    connect(ti, SIGNAL(timeout()), this, SLOT(PlayOneFrame()));
-    ti->start(40);
+    // QTimer *ti = new QTimer(this);
+    // connect(ti, SIGNAL(timeout()), this, SLOT(PlayOneFrame()));
+    // ti->start(40);
 }
 
 void YuvVideoWidget::resizeGL(int w, int h) {

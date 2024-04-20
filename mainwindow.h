@@ -3,6 +3,8 @@
 
 #include <QMainWindow>
 
+#include "ffplayer.h"
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
@@ -48,14 +50,23 @@ private:
 
     // fullscreen
     QWidget *fsWidget_ = nullptr;
-    QWidget *fsParent_ =nullptr;
+    QWidget *fsParent_ = nullptr;
     Qt::WindowFlags fsFlags_;
 
     Theme currentTheme{};
     void loadStyleSheet(Theme theme);
 
+    void clickPushButtonFullScreen();
+
     // QObject interface
-public:
-    bool eventFilter(QObject *watched, QEvent *event) override;
+    // public:
+    //    bool eventFilter(QObject *watched, QEvent *event) override;
+
+
+    std::unique_ptr<FFPlayer> player_;
+
+    // QWidget interface
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
 };
 #endif // MAINWINDOW_H
