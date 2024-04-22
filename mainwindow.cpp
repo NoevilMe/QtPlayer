@@ -29,6 +29,9 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     player_.reset(new FFPlayer);
+    player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
+                                        ui->openGLWidget,
+                                        std::placeholders::_1));
     player_->Start();
 }
 
@@ -60,7 +63,11 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // if (!(qApp->keyboardModifiers() & Qt::ControlModifier)) {
     //     QTimer::singleShot(1000, this, &QWidget::show);
     // }
+    player_->Stop();
+
     event->accept();
+
+
 }
 
 void MainWindow::installWindowAgent() {
@@ -207,6 +214,11 @@ void MainWindow::installWindowAgent() {
             });
     connect(windowBar, &QWK::WindowBar::closeRequested, this, &QWidget::close);
 #endif
+}
+
+void MainWindow::getAllDevices()
+{
+
 }
 
 void MainWindow::loadStyleSheet(Theme theme) {

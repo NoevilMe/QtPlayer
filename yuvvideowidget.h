@@ -7,6 +7,8 @@
 #include <QOpenGLTexture>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
+#include <QFile>
+
 
 /*
 QOpenGLExtraFunctions可以提供VAO相关函数
@@ -22,6 +24,9 @@ public:
     void init(int width, int height);
 
     void paintFrame(unsigned char *buf);
+    void paintAVFrame(AVFrame *frame);
+
+    void resetVideoSize(int width, int height);
 
 public slots:
     void PlayOneFrame();
@@ -40,11 +45,13 @@ private:
     void initTextures(); // 材质，Y,U,V
     void drawTextures();
 
+    void resetTextData();
+
 private:
     int width_;
     int height_;
 
-    float videoRatio_;
+    float videoRatio_= -1;
 
     QMatrix4x4 trans_;
 
@@ -57,6 +64,7 @@ private:
 
     QOpenGLShaderProgram *program; // 着色器程序容器
 
+    int pixFormat_;
     unsigned char *textData_[3] = {0};
 
     unsigned char *bufYuv420p_;

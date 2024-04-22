@@ -44,6 +44,8 @@ private slots:
 private:
     void installWindowAgent();
 
+    void getAllDevices();
+
 private:
     Ui::MainWindow *ui;
     QWK::WidgetWindowAgent *windowAgent;

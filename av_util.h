@@ -13,7 +13,7 @@ std::string ErrorString(int err);
 std::string GetPixFmtName(enum AVPixelFormat pix_fmt);
 std::string GetHwDeviceTypeName(enum AVHWDeviceType type);
 std::string GetCodecName(enum AVCodecID id);
-
+void GetAllDevices();
 } // namespace avutil
 
 #endif // AV_UTIL_H

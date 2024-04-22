@@ -1,6 +1,11 @@
 #include "ffplayer.h"
 #include "av_util.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#include <fstream>
+
 extern "C" {
 // #include <libavcodec/avcodec.h>
 // #include <libavdevice/avdevice.h>
@@ -60,9 +65,16 @@ FFPlayer::FFPlayer() {
     g_av_logger_ = logger_;
 
     decode_frame_ = av_frame_alloc();
+
+    avutil::GetAllDevices();
 }
 
 FFPlayer::~FFPlayer() {
+
+    ResetInputContext();
+    ResetDecodeContext();
+    ResetHWDeviceContext();
+
     if (decode_frame_) {
         av_frame_free(&decode_frame_);
         decode_frame_ = nullptr;
@@ -74,26 +86,36 @@ bool FFPlayer::Start() {
         return false;
     }
 
+    const AVCodec *input_codec = nullptr;
     // decoder
-    std::string codec_name =
-        avutil::GetCodecName(input_video_stream_->codecpar->codec_id);
-    codec_name += "_qsv";
+    hwtype_ = AV_HWDEVICE_TYPE_NONE;
+    if (hwtype_ != AV_HWDEVICE_TYPE_NONE) {
+        std::string codec_name =
+            avutil::GetCodecName(input_video_stream_->codecpar->codec_id);
+        codec_name += "_qsv";
 
-    const AVCodec *input_codec =
-        avcodec_find_decoder_by_name(codec_name.data());
-    if (!input_codec) {
-        logger_->error("can not find decoder {}", codec_name);
+        input_codec = avcodec_find_decoder_by_name(codec_name.data());
+        if (!input_codec) {
+            logger_->error("can not find decoder {}", codec_name);
+            return false;
+        }
+        logger_->info("input codec {}:{}", input_codec->name,
+                      input_codec->long_name);
+        hwtype_ = AV_HWDEVICE_TYPE_QSV;
+
+        if (!InitHWDeviceContext(input_codec)) {
+            return false;
+        }
+    } else {
+        input_codec =
+            avcodec_find_decoder(input_video_stream_->codecpar->codec_id);
+    }
+
+    if (!InitDecodeContext(input_codec)) {
         return false;
     }
-    logger_->info("input codec {}:{}", input_codec->name,
-                  input_codec->long_name);
-    hwtype_ = AV_HWDEVICE_TYPE_QSV;
 
-    if (!InitHWDeviceContext(input_codec)) {
-        return false;
-    }
-
-    if (!InitInputDecodeContext(input_codec)) {
+    if (!InitSwsContext()) {
         return false;
     }
 
@@ -127,6 +149,10 @@ bool FFPlayer::Start() {
     return true;
 }
 
+void FFPlayer::Stop() { running_.store(false); }
+
+// https://www.cnblogs.com/feiyangqingyun/p/16875945.html
+//  ffplay -f dshow -i video="USB Video Device" -s 1280x720 -framerate 30
 bool FFPlayer::InitInputContext() {
     const AVInputFormat *input_fmt = nullptr;
 
@@ -162,11 +188,16 @@ bool FFPlayer::InitInputContext() {
     // can stream h264.
     // av_dict_set(&options, "input_format", "h264", 0);
     // av_dict_set(&options, "pixel_format", "yuvj420p", 0);
-    av_dict_set(&options, "input_format", "mjpeg", 0);
+
+    // 如下几个有顺序，前面的会限制后面
     av_dict_set(&options, "video_size", "1920x1080", 0);
+    av_dict_set(&options, "framerate", "25", 0);
+    // av_dict_set(&options, "input_format", "mjpeg", 0);
+    // av_dict_set(&options, "pixel_format", "nv12", 0);
+    // av_dict_set(&options, "pixel_format", "yuyv422", 0);
+
     // av_dict_set(&options, "pixel_format", "rgb24", 0);
 
-    // av_dict_set(&options, "pixel_format", "yuyv422", 0);
     // https://superuser.com/questions/1310236/tell-ffmpeg-to-drop-frames-to-reduce-memory-usage
     // av_dict_set_int(&options, "rtbufsize", 18432000, 0);
     // av_dict_set (& options, "stimeout", "10000000", 0);//Set timeout
@@ -227,9 +258,10 @@ bool FFPlayer::InitInputContext() {
     }
 
     input_video_stream_ = input_fmt_ctx_->streams[videoIndex];
-    logger_->info("input streams video index = {}, avg fps is {}, codec id {}",
-                  videoIndex, input_video_stream_->avg_frame_rate.num,
-                  input_video_stream_->codecpar->codec_id);
+    logger_->info(
+        "input streams video index = {}, avg fps is {}, codec id {}",
+        videoIndex, input_video_stream_->avg_frame_rate.num,
+        avutil::GetCodecName(input_video_stream_->codecpar->codec_id));
 
     // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
     //  TODO:
@@ -280,7 +312,7 @@ bool FFPlayer::InitHWDeviceContext(const AVCodec *codec, bool get_hw_type) {
     return true;
 }
 
-bool FFPlayer::InitInputDecodeContext(const AVCodec *dec) {
+bool FFPlayer::InitDecodeContext(const AVCodec *dec) {
     input_decode_ctx_ = avcodec_alloc_context3(dec);
     avcodec_parameters_to_context(input_decode_ctx_,
                                   input_video_stream_->codecpar);
@@ -302,9 +334,11 @@ bool FFPlayer::InitInputDecodeContext(const AVCodec *dec) {
                   input_decode_ctx_->framerate.num,
                   input_decode_ctx_->framerate.den);
 
-    input_decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
-    input_decode_ctx_->opaque = this;
-    input_decode_ctx_->get_format = GetFormat;
+    if (hw_device_ctx_) {
+        input_decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
+        input_decode_ctx_->opaque = this;
+        input_decode_ctx_->get_format = GetFormat;
+    }
 
     AVDictionary *codec_opts = nullptr;
 
@@ -328,12 +362,70 @@ bool FFPlayer::InitInputDecodeContext(const AVCodec *dec) {
 
     input_video_stream_->discard = AVDISCARD_DEFAULT;
 
-    logger_->info("src fmt {}, resolution {} x {}",
+    logger_->info("decoder output fmt {}, resolution {} x {}",
                   avutil::GetPixFmtName(input_decode_ctx_->pix_fmt),
                   input_decode_ctx_->width, input_decode_ctx_->height);
 
     logger_->debug("InitInputDecodeContext success");
     return true;
+}
+
+bool FFPlayer::InitSwsContext() {
+    if (hwtype_ == AV_HWDEVICE_TYPE_NONE &&
+        input_decode_ctx_->pix_fmt != AV_PIX_FMT_YUV420P) {
+        int dw = input_decode_ctx_->width >> 2 << 2; // align = 4
+        int dh = input_decode_ctx_->height;
+        AVPixelFormat dst_pix_fmt = AV_PIX_FMT_YUV420P;
+
+        logger_->debug("dest {}x{}, pix_fmt {}", dw, dh, dst_pix_fmt);
+
+        sws_ctx_ =
+            sws_getContext(input_decode_ctx_->width, input_decode_ctx_->height,
+                           input_decode_ctx_->pix_fmt, dw, dh, dst_pix_fmt,
+                           SWS_BICUBIC, NULL, NULL, NULL);
+        if (!sws_ctx_) {
+            logger_->error("sws_getContext fail");
+            return false;
+        }
+
+        return true;
+    }
+
+    return true;
+}
+
+void FFPlayer::ResetInputContext() {
+    if (input_fmt_ctx_) {
+        avformat_close_input(&input_fmt_ctx_);
+        avformat_free_context(input_fmt_ctx_);
+        input_fmt_ctx_ = nullptr;
+    }
+}
+
+void FFPlayer::ResetDecodeContext() {
+    if (input_decode_ctx_) {
+        if (input_decode_ctx_->hw_device_ctx) {
+            av_buffer_unref(&input_decode_ctx_->hw_device_ctx);
+        }
+
+        avcodec_close(input_decode_ctx_);
+        avcodec_free_context(&input_decode_ctx_);
+        input_decode_ctx_ = nullptr;
+    }
+}
+
+void FFPlayer::ResetHWDeviceContext() {
+    if (hw_device_ctx_) {
+        av_buffer_unref(&hw_device_ctx_);
+        hw_device_ctx_ = nullptr;
+    }
+}
+
+void FFPlayer::ResetSwsContext() {
+    if (sws_ctx_) {
+        sws_freeContext(sws_ctx_);
+        sws_ctx_ = nullptr;
+    }
 }
 
 bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
@@ -382,12 +474,107 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
             return false;
         }
 
+        ts_decode_ = util::TimeMilliseconds();
+        logger_->debug("decode cost {}", ts_decode_ - ts_get_);
+
         util::AtExit r([&]() { av_frame_unref(decode_frame_); });
 
         logger_->trace(
             "avcodec_receive_frame ok, fmt {}, resolution {}x{}",
             avutil::GetPixFmtName((AVPixelFormat)decode_frame_->format),
             decode_frame_->width, decode_frame_->height);
+
+        AVFrame *data_frame = nullptr;
+        if (hw_pix_fmt_ == decode_frame_->format) {
+            logger_->debug(
+                "hw frame {}, color_primaries {}, w {}, h {}, "
+                "yw {}, uw {}, vw {}",
+                avutil::GetPixFmtName((AVPixelFormat)decode_frame_->format),
+                decode_frame_->color_primaries, decode_frame_->width,
+                decode_frame_->height, decode_frame_->linesize[0],
+                decode_frame_->linesize[1], decode_frame_->linesize[2]);
+
+            // 如果采用的硬件加速剂，则调用avcodec_receive_frame()函数后，解码后的数据还在GPU中，所以需要通过此函数
+            // 将GPU中的数据转移到CPU中来
+            data_frame = av_frame_alloc();
+
+#if 1
+            if ((ret = av_hwframe_transfer_data(data_frame, decode_frame_, 0)) <
+                0) {
+                logger_->error("av_hwframe_transfer_data fail, {}",
+                               avutil::ErrorString(ret));
+                return false;
+            }
+
+            ts_transfer_ = util::TimeMilliseconds();
+
+            logger_->debug("transfer cost {}", ts_transfer_ - ts_decode_);
+
+            logger_->debug(
+                "transfer frame {}, color_primaries {}, w {}, h {}, "
+                "yw {}, uw {}, vw {}",
+                av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
+                data_frame->color_primaries, data_frame->width,
+                data_frame->height, data_frame->linesize[0],
+                data_frame->linesize[1], data_frame->linesize[2]);
+#else
+            int ret = av_hwframe_map(data_frame, decode_frame_,
+                                     AV_HWFRAME_MAP_READ); // 映射硬件数据帧
+            if (ret < 0) {
+                logger_->error("av_hwframe_map fail, {}",
+                               avutil::ErrorString(ret));
+                return false;
+            }
+            data_frame->width = decode_frame_->width;
+            data_frame->height = decode_frame_->height;
+
+            logger_->debug(
+                "mapped frame {}, color_primaries {}, w {}, h {}, "
+                "yw {}, uw {}, vw {}",
+                av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
+                data_frame->color_primaries, data_frame->width,
+                data_frame->height, data_frame->linesize[0],
+                data_frame->linesize[1], data_frame->linesize[2]);
+#endif
+
+        } else {
+
+            if (sws_ctx_) {
+                data_frame = av_frame_alloc();
+                data_frame->format = AV_PIX_FMT_YUV420P;
+                data_frame->width = input_decode_ctx_->width;
+                data_frame->height = input_decode_ctx_->height;
+                int err = av_frame_get_buffer(data_frame,0);
+                if (err<0) {
+                    logger_->error("av_frame_get_buffer fail, {}", avutil::ErrorString((err)));
+                    return false;
+                }
+
+                // if (av_frame_make_writable(scale_frame) < 0) {
+                //     FATAL("scale frame is not writable");
+                // }
+
+
+                int h = sws_scale(sws_ctx_, decode_frame_->data,
+                                  decode_frame_->linesize, 0, decode_frame_->height,
+                                  data_frame->data, data_frame->linesize);
+                if (h <= 0 || h != data_frame->height) {
+                    logger_->error("sws_scale height error {}", h);
+                    return false;
+                }
+
+            } else {
+                data_frame = decode_frame_;
+            }
+        }
+
+        if (frame_cb_) {
+            frame_cb_(data_frame);
+        }
+
+        if (data_frame != decode_frame_) {
+            av_frame_free(&data_frame);
+        }
     }
 
     return true;
@@ -448,6 +635,23 @@ void FFPlayer::ThreadFunc() {
                 logger_->trace("av_read_frame ok, size {}, timebase {}, {}",
                                pkt->size, pkt->time_base.num,
                                pkt->time_base.den);
+
+                ts_get_ = util::TimeMilliseconds();
+
+                // std::fstream
+                // fs(std::to_string(ts_get_)+".jpg",std::ios_base::out|std::ios_base::binary);
+                // fs.write((const char*)pkt->data,pkt->size);
+                // fs.close();
+
+                // int width, height, nrChannels;
+                // unsigned char *data = stbi_load_from_memory(
+                //     pkt->data, pkt->size, &width, &height, &nrChannels, 0);
+
+                // auto ts_decode = util::TimeMilliseconds();
+                // logger_->debug(
+                //     "decode mjpeg cost {}, width {}, height {}, nrch {}",
+                //     ts_decode - ts_get_, width, height, nrChannels);
+                // stbi_image_free(data);
 
                 this->HandleInputFrame(pkt);
 
