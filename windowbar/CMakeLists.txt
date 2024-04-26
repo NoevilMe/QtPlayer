@@ -1,4 +1,4 @@
-project(WidgetFrame)
+project(WindowBar)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
