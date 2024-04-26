@@ -185,7 +185,6 @@ QSlider::handle:Horizontal:hover {
 background-color:red;
 }
 
-
 QWidget#centralwidget QPushButton{
 background:transparent;
 border:none;
@@ -193,6 +192,12 @@ max-width:30px;
 min-width:30px;
 max-height:30px;
 min-height:30px;
+}
+
+QWidget#centralwidget{
+background:transparent;
+border:1;
+color: #FF0000;
 }
 
 QWidget#centralwidget  QPushButton:hover{

@@ -1,13 +1,10 @@
 #include "mainwindow.h"
-#include "device.h"
+#include "multiplayerform.h"
+#include "playerform.h"
 #include "ui_mainwindow.h"
 
 #include <QFile>
 #include <QStyle>
-#include <QTimer>
-
-#include <QGuiApplication>
-#include <QScreen>
 
 #include <QWKWidgets/widgetwindowagent.h>
 #include <windowbar/windowbar.h>
@@ -15,24 +12,19 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow) {
+    ui->setupUi(this);
     installWindowAgent();
 
-    ui->setupUi(this);
-
-    ui->openGLWidget->init(1280, 720);
+    pagePlayer = new PlayerForm();
+    pagePlayer->setObjectName("player");
+    pageMonitor = new MultiPlayerForm();
+    pageMonitor->setObjectName("monitor");
+    ui->stackedWidget->addWidget(pagePlayer);
+    ui->stackedWidget->addWidget(pageMonitor);
+    ui->stackedWidget->setCurrentWidget(pagePlayer);
+    ui->stackedWidget->update();
 
     loadStyleSheet(Light);
-
-    auto devices = getVideoDevices();
-    for (auto &d : devices) {
-        qDebug() << "device " << d.name;
-    }
-
-    player_.reset(new FFPlayer);
-    player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
-                                        ui->openGLWidget,
-                                        std::placeholders::_1));
-    player_->Start();
 }
 
 MainWindow::~MainWindow() { delete ui; }
@@ -63,11 +55,11 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // if (!(qApp->keyboardModifiers() & Qt::ControlModifier)) {
     //     QTimer::singleShot(1000, this, &QWidget::show);
     // }
-    player_->Stop();
+    // player_->Stop();
 
     event->accept();
 
-
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::installWindowAgent() {
@@ -99,6 +91,33 @@ void MainWindow::installWindowAgent() {
         // Real menu
         auto settings = new QMenu(tr("设置(&S)"), menuBar);
         settings->addAction(darkAction);
+        settings->addSeparator();
+        auto win = new QMenu(tr("窗口(&W)"), menuBar);
+        auto winPlayerAction = new QAction(tr("播放器(&P)"), menuBar);
+        winPlayerAction->setCheckable(true);
+        win->addAction(winPlayerAction);
+        auto winMonitorAction = new QAction(tr("监视器(&M)"), menuBar);
+        winMonitorAction->setCheckable(true);
+        win->addAction(winMonitorAction);
+
+        connect(winPlayerAction, &QAction::triggered, this, [=](bool checked) {
+            winMonitorAction->setChecked(!checked);
+            if (checked) {
+                switchWindowType(WindowType::Player);
+            } else {
+                switchWindowType(WindowType::Monitor);
+            }
+        });
+        connect(winMonitorAction, &QAction::triggered, this, [=](bool checked) {
+            winPlayerAction->setChecked(!checked);
+            if (checked) {
+                switchWindowType(WindowType::Monitor);
+            } else {
+                switchWindowType(WindowType::Player);
+            }
+        });
+
+        settings->addMenu(win);
 
 #ifdef Q_OS_WIN
         settings->addSeparator();
@@ -110,6 +129,7 @@ void MainWindow::installWindowAgent() {
 
         menuBar->addMenu(file);
         menuBar->addSeparator();
+        // menuBar->addMenu(win);
         menuBar->addMenu(settings);
 
         return menuBar;
@@ -216,9 +236,16 @@ void MainWindow::installWindowAgent() {
 #endif
 }
 
-void MainWindow::getAllDevices()
-{
+void MainWindow::getAllDevices() {}
 
+void MainWindow::switchWindowType(WindowType type) {
+    if (type == WindowType::Player) {
+        ui->stackedWidget->setCurrentWidget(pagePlayer);
+    } else if (type == WindowType::Monitor) {
+        ui->stackedWidget->setCurrentWidget(pageMonitor);
+    }
+
+    ui->stackedWidget->update();
 }
 
 void MainWindow::loadStyleSheet(Theme theme) {
@@ -232,103 +259,4 @@ void MainWindow::loadStyleSheet(Theme theme) {
         setStyleSheet(QString::fromUtf8(qss.readAll()));
         //        Q_EMIT themeChanged();
     }
-}
-
-void MainWindow::clickPushButtonFullScreen() {
-    //对pushButton实现模拟点击
-    //定义左键点击事件，Qt::NoModifier代表无其他修饰键被按下
-    QMouseEvent mouseDown(QEvent::MouseButtonPress, QPoint(1, 1),
-                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    //定义左键释放事件，Qt::NoModifier代表无其他修饰键被按下
-    QMouseEvent mouseUp(QEvent::MouseButtonRelease, QPoint(1, 1),
-                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    //向按钮pushButton发送鼠标左键按下事件，之后发送鼠标左键释放事件，模拟一次点击
-    QApplication::sendEvent(ui->pushButtonFullScreen, &mouseDown);
-    QApplication::sendEvent(ui->pushButtonFullScreen, &mouseUp);
-}
-
-// bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
-//    if (fsWidget_ != nullptr && watched == fsWidget_ &&
-//        event->type() == QEvent::KeyPress) {
-//        qDebug() << "ESC";
-//        QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
-//        if (keyEvent->key() == Qt::Key_Escape) {
-//            clickPushButtonFullScreen();
-
-//            return true; // 事件已处理，不传递给其他对象
-//        }
-//    }
-//    return QMainWindow::eventFilter(watched, event); // 将事件传递给基类处理
-//}
-
-void MainWindow::keyPressEvent(QKeyEvent *event) {
-    if (this->isFullScreen() && event->key() == Qt::Key_Escape) {
-        qDebug() << "ESC";
-        clickPushButtonFullScreen();
-    }
-}
-
-void MainWindow::on_pushButtonList_toggled(bool checked) {
-    if (ui->listWidgetFiles->isHidden()) {
-        ui->listWidgetFiles->show();
-    } else {
-        ui->listWidgetFiles->hide();
-    }
-}
-
-void MainWindow::on_pushButtonFullScreen_toggled(bool checked) {
-    // https://blog.csdn.net/gdizcm/article/details/131649492
-    // https://blog.csdn.net/bai2010bingbing/article/details/91378903
-    // https://www.cnblogs.com/wuhanpjf/p/11247770.html
-    // https://www.cnblogs.com/lvdongjie/p/3758025.html
-
-    if (checked) {
-        qDebug() << "enable full screen";
-
-        //        auto scs = QGuiApplication::screens();
-        //        for(auto &s: scs) {
-        //            qDebug() <<s->geometry();
-        //        }
-
-        //        auto ps = this->screen();
-        //        qDebug() << "this screen" <<ps->geometry();
-
-        //        fsWidget_ = ui->centralwidget;
-        //        fsParent_ = fsWidget_->parentWidget();
-        //        fsFlags_ = fsWidget_->windowFlags();
-
-        //        fsWidget_->setWindowFlags(Qt::Window |
-        //        Qt::FramelessWindowHint); fsWidget_->setFocus();
-        //        fsWidget_->installEventFilter(this);
-        this->menuWidget()->hide();
-        ui->widgetControl->hide();
-        ui->listWidgetFiles->hide();
-        this->showFullScreen();
-        //        this->hide();
-
-    } else {
-        qDebug() << "disable full screen";
-        //        ui->centralwidget->setWindowFlags(Qt::Window|Qt::WindowStaysOnTopHint|Qt::FramelessWindowHint);
-        //        ui->centralwidget->setFocus();
-        //        ui->centralwidget->showFullScreen();
-        //        fsWidget_->setParent(fsParent_);
-        //        fsWidget_->setWindowFlags(fsFlags_);
-        //        fsWidget_->showNormal();
-
-        //        fsWidget_->removeEventFilter(this);
-        //        fsWidget_ = nullptr;
-        //        fsParent_ = nullptr;
-        this->menuWidget()->show();
-        ui->widgetControl->show();
-        this->showNormal();
-        //        this->show();
-    }
-
-    //    ui->centralwidget->raise();
-    //    this->show();
-    //    this->showFullScreen();
-    //    this->raise();
-    //    ui->openGLWidget->show();
-    //    ui->openGLWidget->showFullScreen();
-    //    ui->openGLWidget->raise();
 }

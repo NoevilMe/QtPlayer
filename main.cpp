@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "playerform.h"
 
 #include "util.h"
 #include <QApplication>
@@ -18,7 +19,9 @@ int main(int argc, char *argv[]) {
     QGuiApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
 
     QApplication a(argc, argv);
+    // MainWindow w;
     MainWindow w;
+    // PlayerForm w;
     w.show();
     return a.exec();
 }

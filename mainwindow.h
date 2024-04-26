@@ -1,15 +1,11 @@
-#ifndef MAINWINDOW_H
-#define MAINWINDOW_H
+#ifndef PLAYERWINDOW_H
+#define PLAYERWINDOW_H
 
 #include <QMainWindow>
 
-#include "ffplayer.h"
-
-QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
 }
-QT_END_NAMESPACE
 
 namespace QWK {
 class WidgetWindowAgent;
@@ -20,7 +16,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
     enum Theme {
@@ -28,6 +24,12 @@ public:
         Light,
     };
     Q_ENUM(Theme)
+
+    enum WindowType {
+        Player,
+        Monitor,
+    };
+    Q_ENUM(WindowType)
 
 Q_SIGNALS:
     void themeChanged();
@@ -37,38 +39,22 @@ protected:
 
     void closeEvent(QCloseEvent *event) override;
 
-private slots:
-    void on_pushButtonList_toggled(bool checked);
-    void on_pushButtonFullScreen_toggled(bool checked);
-
 private:
     void installWindowAgent();
 
     void getAllDevices();
 
+    void switchWindowType(WindowType type);
+
 private:
     Ui::MainWindow *ui;
     QWK::WidgetWindowAgent *windowAgent;
 
-    // fullscreen
-    QWidget *fsWidget_ = nullptr;
-    QWidget *fsParent_ = nullptr;
-    Qt::WindowFlags fsFlags_;
-
     Theme currentTheme{};
     void loadStyleSheet(Theme theme);
 
-    void clickPushButtonFullScreen();
-
-    // QObject interface
-    // public:
-    //    bool eventFilter(QObject *watched, QEvent *event) override;
-
-
-    std::unique_ptr<FFPlayer> player_;
-
-    // QWidget interface
-protected:
-    void keyPressEvent(QKeyEvent *event) override;
+    QWidget *pagePlayer;
+    QWidget *pageMonitor;
 };
-#endif // MAINWINDOW_H
+
+#endif // PLAYERWINDOW_H

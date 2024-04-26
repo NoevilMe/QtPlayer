@@ -48,6 +48,9 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
+
+        playerform.h playerform.cpp playerform.ui
+        multiplayerform.h multiplayerform.cpp multiplayerform.ui
     )
 else()
     add_executable(${PROJECT_NAME}
@@ -57,13 +60,9 @@ else()
 endif()
 
 
-# target_link_libraries(QWindowKitDemo PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
-# target_link_libraries(QWindowKitDemo PRIVATE QWKCore QWKWidgets WidgetFrame)
-
 target_include_directories(${PROJECT_NAME} PRIVATE "D:\\dev\\ThirdLib\\include")
 target_link_directories(${PROJECT_NAME} PRIVATE "D:\\dev\\ThirdLib\\lib")
 target_link_libraries(${PROJECT_NAME} PRIVATE avformat avdevice avcodec swresample swscale avutil)
-
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE strmiids ole32 oleaut32)
 endif()
