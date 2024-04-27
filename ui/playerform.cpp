@@ -1,6 +1,7 @@
 #include "playerform.h"
-#include "device.h"
 #include "ui_playerform.h"
+
+#include "player/device.h"
 
 #include <QFile>
 #include <QStyle>
@@ -36,6 +37,10 @@ PlayerForm::PlayerForm(QWidget *parent)
 
 PlayerForm::~PlayerForm() { delete ui;
     qDebug()<<"PlayerForm::~PlayerForm() ";
+
+    if (player_) {
+        player_->Stop();
+    }
 }
 
 

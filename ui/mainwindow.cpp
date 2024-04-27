@@ -58,8 +58,6 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // player_->Stop();
 
     event->accept();
-
-    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::installWindowAgent() {

@@ -1,9 +1,9 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QWidget>>
+#include <QWidget>
 
-#include "ffplayer.h"
+#include "player/ffplayer.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {

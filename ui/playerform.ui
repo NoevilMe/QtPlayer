@@ -355,7 +355,7 @@ width: 20%;
   <customwidget>
    <class>YuvVideoWidget</class>
    <extends>QOpenGLWidget</extends>
-   <header location="global">yuvvideowidget.h</header>
+   <header location="global">ui/yuvvideowidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

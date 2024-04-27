@@ -1,7 +1,6 @@
 #include "ffplayer.h"
 #include "av_util.h"
 
-
 #include <fstream>
 
 extern "C" {
@@ -147,7 +146,12 @@ bool FFPlayer::Start() {
     return true;
 }
 
-void FFPlayer::Stop() { running_.store(false); }
+void FFPlayer::Stop() {
+    running_.store(false);
+    if (thd_.joinable()) {
+        thd_.join();
+    }
+}
 
 // https://www.cnblogs.com/feiyangqingyun/p/16875945.html
 //  ffplay -f dshow -i video="USB Video Device" -s 1280x720 -framerate 30
@@ -542,9 +546,10 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                 data_frame->format = AV_PIX_FMT_YUV420P;
                 data_frame->width = input_decode_ctx_->width;
                 data_frame->height = input_decode_ctx_->height;
-                int err = av_frame_get_buffer(data_frame,0);
-                if (err<0) {
-                    logger_->error("av_frame_get_buffer fail, {}", avutil::ErrorString((err)));
+                int err = av_frame_get_buffer(data_frame, 0);
+                if (err < 0) {
+                    logger_->error("av_frame_get_buffer fail, {}",
+                                   avutil::ErrorString((err)));
                     return false;
                 }
 
@@ -552,10 +557,10 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                 //     FATAL("scale frame is not writable");
                 // }
 
-
-                int h = sws_scale(sws_ctx_, decode_frame_->data,
-                                  decode_frame_->linesize, 0, decode_frame_->height,
-                                  data_frame->data, data_frame->linesize);
+                int h =
+                    sws_scale(sws_ctx_, decode_frame_->data,
+                              decode_frame_->linesize, 0, decode_frame_->height,
+                              data_frame->data, data_frame->linesize);
                 if (h <= 0 || h != data_frame->height) {
                     logger_->error("sws_scale height error {}", h);
                     return false;

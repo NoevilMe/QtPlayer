@@ -1,7 +1,7 @@
 #ifndef FFPLAYER_H
 #define FFPLAYER_H
 
-#include "util.h"
+#include "util/util.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

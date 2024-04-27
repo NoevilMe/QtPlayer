@@ -28,19 +28,25 @@ add_subdirectory(windowbar)
 
 set(PROJECT_SOURCES
         main.cpp
-        mainwindow.cpp
-        mainwindow.h
-        mainwindow.ui
-        av_util.cpp
-        av_util.h
-        ffplayer.cpp
-        ffplayer.h
-        yuvvideowidget.cpp
-        yuvvideowidget.h
-        util.cpp
-        util.h
-        device.cpp
-        device.h
+        ui/mainwindow.cpp
+        ui/mainwindow.h
+        ui/mainwindow.ui
+        ui/playerform.h
+        ui/playerform.cpp
+        ui/playerform.ui
+        ui/multiplayerform.h
+        ui/multiplayerform.cpp
+        ui/multiplayerform.ui
+        ui/yuvvideowidget.cpp
+        ui/yuvvideowidget.h
+        player/av_util.cpp
+        player/av_util.h
+        player/ffplayer.cpp
+        player/ffplayer.h
+        player/device.cpp
+        player/device.h
+        util/util.cpp
+        util/util.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -48,9 +54,6 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
-
-        playerform.h playerform.cpp playerform.ui
-        multiplayerform.h multiplayerform.cpp multiplayerform.ui
     )
 else()
     add_executable(${PROJECT_NAME}

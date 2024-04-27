@@ -1,5 +1,5 @@
 #include "yuvvideowidget.h"
-#include "util.h"
+#include "util/util.h"
 
 #include <QTimer>
 

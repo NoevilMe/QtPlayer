@@ -1,7 +1,7 @@
-#include "mainwindow.h"
-#include "playerform.h"
+#include "ui/mainwindow.h"
+#include "ui/playerform.h"
 
-#include "util.h"
+#include "util/util.h"
 #include <QApplication>
 
 extern "C" {
