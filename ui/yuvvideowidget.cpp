@@ -90,31 +90,31 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
         return;
     }
 
-    if (AV_PIX_FMT_YUVJ420P == frame->format) {
-        std::string filename =
-            std::to_string(util::TimeMilliseconds()) + ".yuv";
-        QFile file_(filename.data());
-        file_.open(QIODevice::WriteOnly);
+    // if (AV_PIX_FMT_YUVJ420P == frame->format) {
+    //     std::string filename =
+    //         std::to_string(util::TimeMilliseconds()) + ".yuv";
+    //     QFile file_(filename.data());
+    //     file_.open(QIODevice::WriteOnly);
 
-        // for (int i = 0; i < frame->height; i++) {
-        //     file_.write((char *)(frame->data[0] + i * frame->linesize[0]),
-        //                 frame->width);
-        // }
+    //     // for (int i = 0; i < frame->height; i++) {
+    //     //     file_.write((char *)(frame->data[0] + i * frame->linesize[0]),
+    //     //                 frame->width);
+    //     // }
 
-        // for (int i = 0; i < frame->height / 2; i++) {
-        //     file_.write((char *)(frame->data[1] + i * frame->linesize[1]),
-        //                 frame->width);
-        // }
+    //     // for (int i = 0; i < frame->height / 2; i++) {
+    //     //     file_.write((char *)(frame->data[1] + i * frame->linesize[1]),
+    //     //                 frame->width);
+    //     // }
 
 
-        // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
-        // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
-        // file_.write((char *)frame->data[2], frame->linesize[2] * frame->height / 2);
+    //     // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
+    //     // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
+    //     // file_.write((char *)frame->data[2], frame->linesize[2] * frame->height / 2);
 
-        // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
-        // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
-        file_.flush();
-    }
+    //     // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
+    //     // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
+    //     file_.flush();
+    // }
 
     // https://blog.csdn.net/chinabinlang/article/details/7804808
     resetVideoSize(frame->linesize[0], frame->height);
@@ -338,8 +338,7 @@ void YuvVideoWidget::initTextures() {
 
 void YuvVideoWidget::drawTextures() {
     // 默认0-15 纹理单元可用
-
-    qDebug() << "pix fmt " << pixFormat_;
+    // qDebug() << "pix fmt " << pixFormat_;
 
     if (pixFormat_ == AV_PIX_FMT_YUV420P) {
 

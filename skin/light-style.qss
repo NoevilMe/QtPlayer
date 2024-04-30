@@ -274,3 +274,11 @@ QWidget#centralwidget QListWidget{
 background:transparent;
 border:none;
 }
+
+QTreeView,QListView,QTableView,QTabWidget::pane{
+border:1px solid #242424;
+selection-background-color:#646464;
+selection-color:#DCDCDC;
+alternate-background-color:#525252;
+gridline-color:#242424;
+}

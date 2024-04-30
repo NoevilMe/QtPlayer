@@ -28,6 +28,7 @@ add_subdirectory(windowbar)
 
 set(PROJECT_SOURCES
         main.cpp
+        av_def.h
         ui/mainwindow.cpp
         ui/mainwindow.h
         ui/mainwindow.ui
@@ -37,6 +38,9 @@ set(PROJECT_SOURCES
         ui/multiplayerform.h
         ui/multiplayerform.cpp
         ui/multiplayerform.ui
+        ui/openmediadialog.h
+        ui/openmediadialog.cpp
+        ui/openmediadialog.ui
         ui/yuvvideowidget.cpp
         ui/yuvvideowidget.h
         player/av_util.cpp
@@ -54,6 +58,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
+
+
     )
 else()
     add_executable(${PROJECT_NAME}

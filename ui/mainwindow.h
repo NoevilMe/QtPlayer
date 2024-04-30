@@ -3,14 +3,17 @@
 
 #include <QMainWindow>
 
-namespace Ui {
-class MainWindow;
-}
-
 namespace QWK {
 class WidgetWindowAgent;
 class StyleAgent;
 } // namespace QWK
+
+class PlayerForm;
+class MultiPlayerForm;
+
+namespace Ui {
+class MainWindow;
+}
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -46,6 +49,8 @@ private:
 
     void switchWindowType(WindowType type);
 
+    void openMediaActionTriggered(bool checked);
+
 private:
     Ui::MainWindow *ui;
     QWK::WidgetWindowAgent *windowAgent;
@@ -53,8 +58,8 @@ private:
     Theme currentTheme{};
     void loadStyleSheet(Theme theme);
 
-    QWidget *pagePlayer;
-    QWidget *pageMonitor;
+    PlayerForm *pagePlayer;
+    MultiPlayerForm *pageMonitor;
 };
 
 #endif // PLAYERWINDOW_H

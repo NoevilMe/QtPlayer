@@ -4,13 +4,13 @@
 #include <QWidget>
 
 #include "player/ffplayer.h"
+#include "av_def.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class PlayerForm;
 }
 QT_END_NAMESPACE
-
 
 class PlayerForm : public QWidget {
     Q_OBJECT
@@ -19,11 +19,19 @@ public:
     PlayerForm(QWidget *parent = nullptr);
     ~PlayerForm();
 
+    bool openMedia(MediaSource media);
 
 private slots:
     void on_pushButtonList_toggled(bool checked);
     void on_pushButtonFullScreen_toggled(bool checked);
 
+    // QWidget interface
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+
+private:
+    void clickPushButtonFullScreen();
 
 private:
     Ui::PlayerForm *ui;
@@ -33,22 +41,6 @@ private:
     QWidget *fsParent_ = nullptr;
     Qt::WindowFlags fsFlags_;
 
-
-    void clickPushButtonFullScreen();
-
-    // QObject interface
-    // public:
-    //    bool eventFilter(QObject *watched, QEvent *event) override;
-
-
     std::unique_ptr<FFPlayer> player_;
-
-    // QWidget interface
-protected:
-    void keyPressEvent(QKeyEvent *event) override;
-
-    // QWidget interface
-protected:
-    void closeEvent(QCloseEvent *event) override;
 };
 #endif // MAINWINDOW_H

@@ -1,6 +1,8 @@
 #ifndef FFPLAYER_H
 #define FFPLAYER_H
 
+#include "av_def.h"
+
 #include "util/util.h"
 
 extern "C" {
@@ -30,13 +32,17 @@ public:
     bool Start();
     void Stop();
 
+    void SetMediaSource(MediaSource media);
+
     void SetFrameCallback(const std::function<void(AVFrame *)> &cb) {
         frame_cb_ = cb;
     }
 
 protected:
     bool InitInputContext();
-    bool InitHWDeviceContext(const AVCodec *codec, bool get_hw_type = false);
+    bool InitInputCodec();
+    bool InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype,
+                             bool get_hw_type = false);
     bool InitDecodeContext(const AVCodec *dec);
     bool InitSwsContext();
 
@@ -54,9 +60,11 @@ protected:
     void ThreadFunc();
 
 protected:
+    MediaSource media_source_;
+
     AvFunctionInterrupt interrupt_;
 
-    AVHWDeviceType hwtype_ = AV_HWDEVICE_TYPE_VAAPI;
+    AVHWDeviceType hwtype_;
     // 硬件加速设备
     AVBufferRef *hw_device_ctx_ = nullptr;
 
@@ -64,20 +72,27 @@ protected:
     AVStream *input_video_stream_ = nullptr;
     AVStream *input_audio_stream = nullptr;
 
+    const AVCodec *input_codec_ = nullptr;
     AVCodecContext *input_decode_ctx_ = nullptr;
     AVFrame *decode_frame_ = nullptr;
 
     AVPixelFormat hw_pix_fmt_ = AVPixelFormat::AV_PIX_FMT_NONE;
+    bool map_hw_frame_ = true;
 
-    SwsContext*     sws_ctx_=nullptr;
+    AVPixelFormat sws_fmt_ = AV_PIX_FMT_YUV420P;
+    int sws_width_ = 0;
+    int sws_height_ = 0;
+    SwsContext *sws_ctx_ = nullptr;
 
-    long long ts_get_=0;
-    long long ts_decode_=0;
-    long long ts_transfer_=0;
+    long long ts_get_ = 0;
+    long long ts_decode_ = 0;
+    long long ts_hw_ = 0; // transfer or map
+    long long ts_sws_ = 0; // sws_scale
+    long long ts_cb_ = 0;
 
     std::atomic_bool running_;
     std::thread thd_;
-       std::function<void(AVFrame *)> frame_cb_;
+    std::function<void(AVFrame *)> frame_cb_;
     std::shared_ptr<spdlog::logger> logger_;
 };
 

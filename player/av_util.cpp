@@ -23,12 +23,12 @@ std::string GetPixFmtName(AVPixelFormat pix_fmt) {
     return av_get_pix_fmt_name(pix_fmt);
 }
 
-std::string GetHwDeviceTypeName(enum AVHWDeviceType type) {
+std::string GetHWDeviceTypeName(enum AVHWDeviceType type) {
     auto name = av_hwdevice_get_type_name(type);
     if (name)
         return name;
     else
-        return std::string();
+        return "none";
 }
 
 std::string GetCodecName(AVCodecID id) { return avcodec_get_name(id); }
@@ -64,11 +64,34 @@ void GetAllDevices() {
                 continue;
             } else {
                 enum AVMediaType type = *devInfo->media_types;
-
-
             }
         }
     }
+}
+
+AVHWDeviceType GetDefaultHWDeviceType() {
+#ifdef _WIN32
+    return AV_HWDEVICE_TYPE_QSV;
+#elif defined(__linux__)
+    return AV_HWDEVICE_TYPE_VAAPI;
+#else
+    return AV_HWDEVICE_TYPE_VAAPI;
+#endif
+}
+
+std::string GetDecoderSuffixByHWDeviceType(AVHWDeviceType type) {
+    std::string suffix;
+    switch (type) {
+    case AV_HWDEVICE_TYPE_QSV:
+        suffix = "_qsv";
+        break;
+    case AV_HWDEVICE_TYPE_CUDA:
+        suffix = "_cuvid";
+        break;
+    default:
+        break;
+    }
+    return suffix;
 }
 
 } // namespace avutil

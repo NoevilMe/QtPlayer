@@ -11,7 +11,7 @@ extern "C" {
 
 int main(int argc, char *argv[]) {
     util::log::Init("play.log", 1024 * 1024 * 25, 20);
-    util::log::EnableConsole();
+    // util::log::EnableConsole();
     util::log::SetLevel("trace");
 
     avdevice_register_all();

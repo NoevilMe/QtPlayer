@@ -10,39 +10,30 @@
 #include <QGuiApplication>
 #include <QScreen>
 
-
-
 PlayerForm::PlayerForm(QWidget *parent)
     : QWidget(parent), ui(new Ui::PlayerForm) {
-    // installWindowAgent();
-
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
-
-    // ui->openGLWidget->init(1280, 720);
-
-
-
-    auto devices = getVideoDevices();
-    for (auto &d : devices) {
-        qDebug() << "device " << d.name;
-    }
-
-    player_.reset(new FFPlayer);
-    player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
-                                        ui->openGLWidget,
-                                        std::placeholders::_1));
-    player_->Start();
 }
 
-PlayerForm::~PlayerForm() { delete ui;
-    qDebug()<<"PlayerForm::~PlayerForm() ";
+PlayerForm::~PlayerForm() {
+    delete ui;
+    qDebug() << "PlayerForm::~PlayerForm() ";
 
     if (player_) {
         player_->Stop();
     }
 }
 
+bool PlayerForm::openMedia(MediaSource media) {
+
+    player_.reset(new FFPlayer);
+    player_->SetMediaSource(media);
+    player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
+                                        ui->openGLWidget,
+                                        std::placeholders::_1));
+    return player_->Start();
+}
 
 void PlayerForm::clickPushButtonFullScreen() {
     //对pushButton实现模拟点击
@@ -95,7 +86,6 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
     // if (checked) {
     //     qDebug() << "enable full screen";
 
-
     //     this->menuWidget()->hide();
     //     ui->widgetControl->hide();
     //     ui->listWidgetFiles->hide();
@@ -109,11 +99,8 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
     //     this->showNormal();
     //     //        this->show();
     // }
-
 }
 
-
-void PlayerForm::closeEvent(QCloseEvent *event)
-{
-    qDebug()<<"PlayerForm::closeEvent";
+void PlayerForm::closeEvent(QCloseEvent *event) {
+    qDebug() << "PlayerForm::closeEvent";
 }

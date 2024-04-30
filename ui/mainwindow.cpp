@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "multiplayerform.h"
+#include "openmediadialog.h"
 #include "playerform.h"
 #include "ui_mainwindow.h"
 
@@ -71,7 +72,16 @@ void MainWindow::installWindowAgent() {
 
         // Virtual menu
         auto file = new QMenu(tr("文件(&F)"), menuBar);
-        file->addAction(new QAction(tr("打开(&O)"), menuBar));
+
+        auto openAction = new QAction(tr("打开(&O)"), menuBar);
+        file->addAction(openAction);
+        connect(openAction, &QAction::triggered, this,
+                &MainWindow::openMediaActionTriggered);
+        // connect(openAction, &QAction::triggered, this, [=](bool checked) {
+        //     OpenMediaDialog dlg(this);
+        //     dlg.exec();
+        // });
+
         file->addSeparator();
         file->addAction(new QAction(tr("退出(&E)"), menuBar));
 
@@ -246,10 +256,21 @@ void MainWindow::switchWindowType(WindowType type) {
     ui->stackedWidget->update();
 }
 
+void MainWindow::openMediaActionTriggered(bool checked) {
+    OpenMediaDialog dlg(this);
+    if (dlg.exec() == QDialog::Accepted) {
+        qDebug()<<"open media " << (int)dlg.mediaSource.type <<", " << dlg.mediaSource.src;
+
+        pagePlayer->openMedia(dlg.mediaSource);
+    }
+}
+
 void MainWindow::loadStyleSheet(Theme theme) {
     if (!styleSheet().isEmpty() && theme == currentTheme)
         return;
     currentTheme = theme;
+
+    // qApp->setPalette(QPalette("#132D48"));
 
     if (QFile qss(theme == Dark ? QStringLiteral(":/dark-style.qss")
                                 : QStringLiteral(":/light-style.qss"));
