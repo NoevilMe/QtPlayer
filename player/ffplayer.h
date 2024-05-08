@@ -69,8 +69,8 @@ protected:
     AVBufferRef *hw_device_ctx_ = nullptr;
 
     AVFormatContext *input_fmt_ctx_ = nullptr;
+    // video
     AVStream *input_video_stream_ = nullptr;
-    AVStream *input_audio_stream = nullptr;
 
     const AVCodec *input_codec_ = nullptr;
     AVCodecContext *input_decode_ctx_ = nullptr;
@@ -84,9 +84,12 @@ protected:
     int sws_height_ = 0;
     SwsContext *sws_ctx_ = nullptr;
 
+    // audio
+    AVStream *input_audio_stream = nullptr;
+
     long long ts_get_ = 0;
     long long ts_decode_ = 0;
-    long long ts_hw_ = 0; // transfer or map
+    long long ts_hw_ = 0;  // transfer or map
     long long ts_sws_ = 0; // sws_scale
     long long ts_cb_ = 0;
 

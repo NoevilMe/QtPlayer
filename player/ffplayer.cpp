@@ -89,7 +89,9 @@ bool FFPlayer::Start() {
         return false;
     }
 
-    InitInputCodec();
+    if (!InitInputCodec()) {
+        return false;
+    }
 
     if (!InitDecodeContext(input_codec_)) {
         return false;
@@ -239,9 +241,9 @@ bool FFPlayer::InitInputContext() {
 
     logger_->debug("avformat_open_input success");
 
-    // 1.2 解码一段数据，获取流相关信息
-    input_fmt_ctx_->probesize = 1000 * 1024;
-    input_fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
+    // 1.2 解码一段数据，获取流相关信息 https://zhuanlan.zhihu.com/p/639412354
+    //    input_fmt_ctx_->probesize = 1000 * 1024;
+    //    input_fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
 
     interrupt_.func_start_timestamp = util::TimeMilliseconds();
     if (avformat_find_stream_info(input_fmt_ctx_, 0) < 0) {
@@ -257,30 +259,42 @@ bool FFPlayer::InitInputContext() {
     logger_->debug("avformat_find_stream_info success");
 
     // 1.3 获取输入ctx
-    int videoIndex = -1;
-    for (int i = 0; i < input_fmt_ctx_->nb_streams; ++i) {
-        if (input_fmt_ctx_->streams[i]->codecpar->codec_type ==
-            AVMEDIA_TYPE_VIDEO) {
-            videoIndex = i;
-            break;
-        }
-    }
+    int video_index = -1;
+    video_index = av_find_best_stream(input_fmt_ctx_, AVMEDIA_TYPE_VIDEO, -1,
+                                      -1, nullptr, 0);
 
-    if (videoIndex == -1) {
+    if (video_index < 0) {
         logger_->error("no video stream in input stream");
         return false;
     }
 
-    input_video_stream_ = input_fmt_ctx_->streams[videoIndex];
+    input_video_stream_ = input_fmt_ctx_->streams[video_index];
     logger_->info(
         "input streams video index = {}, avg fps is {}, codec id {}",
-        videoIndex, input_video_stream_->avg_frame_rate.num,
+        video_index, input_video_stream_->avg_frame_rate.num,
         avutil::GetCodecName(input_video_stream_->codecpar->codec_id));
 
     // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
     //  TODO:
     std::string name(fmt::format("@ {}", url));
-    av_dump_format(input_fmt_ctx_, videoIndex, name.data(), 0);
+    av_dump_format(input_fmt_ctx_, video_index, name.data(), 0);
+
+    int audio_index = -1;
+    audio_index = av_find_best_stream(input_fmt_ctx_, AVMEDIA_TYPE_AUDIO, -1,
+                                      -1, nullptr, 0);
+    if (audio_index > 0) {
+        input_audio_stream = input_fmt_ctx_->streams[audio_index];
+        logger_->info(
+            "input streams audio index = {}, avg fps is {}, codec id {}",
+            audio_index, input_audio_stream->avg_frame_rate.num,
+            avutil::GetCodecName(input_audio_stream->codecpar->codec_id));
+
+        // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
+        //  TODO:
+        std::string name(fmt::format("@ {}", url));
+        av_dump_format(input_fmt_ctx_, audio_index, name.data(), 0);
+    }
+
     return true;
 }
 
@@ -291,7 +305,7 @@ bool FFPlayer::InitInputCodec() {
     // AV_HWDEVICE_TYPE_QSV 不支持map
     //    hwtype_ = AV_HWDEVICE_TYPE_DXVA2; //AV_HWDEVICE_TYPE_D3D11VA;
 
-    //    hwtype_ = AV_HWDEVICE_TYPE_QSV;
+    //    hwtype_ = AV_HWDEVICE_TYPE_NONE;
 
     std::vector<AVHWDeviceType> try_hwdevice_types;
 
@@ -366,6 +380,8 @@ bool FFPlayer::InitInputCodec() {
         logger_->error("can not find decoder for {}", codec_name);
         return false;
     }
+
+    return true;
 }
 
 bool FFPlayer::InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype,
@@ -426,8 +442,8 @@ bool FFPlayer::InitDecodeContext(const AVCodec *dec) {
                    input_video_stream_->avg_frame_rate.num,
                    input_video_stream_->avg_frame_rate.den);
 
-    input_decode_ctx_->time_base = input_video_stream_->time_base;
-    input_decode_ctx_->framerate = input_video_stream_->avg_frame_rate;
+    //    input_decode_ctx_->time_base = input_video_stream_->time_base;
+    //    input_decode_ctx_->framerate = input_video_stream_->avg_frame_rate;
 
     logger_->info("input decoder time_base {}, {}",
                   input_decode_ctx_->time_base.num,
@@ -455,7 +471,7 @@ bool FFPlayer::InitDecodeContext(const AVCodec *dec) {
         av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
     }
 
-    input_decode_ctx_->thread_count = 8;
+    //    input_decode_ctx_->thread_count = 8;
 
     int err = avcodec_open2(input_decode_ctx_, dec, NULL);
     if (err < 0) {
@@ -778,7 +794,9 @@ void FFPlayer::ThreadFunc() {
                 //     ts_decode - ts_get_, width, height, nrChannels);
                 // stbi_image_free(data);
 
-                this->HandleInputFrame(pkt);
+                if (pkt->stream_index == input_video_stream_->index) {
+                    this->HandleInputFrame(pkt);
+                }
 
                 av_packet_unref(pkt);
             } else if (AVERROR(EAGAIN) == err) {
