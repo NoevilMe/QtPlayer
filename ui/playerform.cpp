@@ -4,6 +4,7 @@
 #include "player/device.h"
 
 #include <QFile>
+#include <QMediaDevices>
 #include <QStyle>
 #include <QTimer>
 
@@ -14,6 +15,8 @@ PlayerForm::PlayerForm(QWidget *parent)
     : QWidget(parent), ui(new Ui::PlayerForm) {
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
+
+    listOutputAudioDevices();
 }
 
 PlayerForm::~PlayerForm() {
@@ -22,18 +25,39 @@ PlayerForm::~PlayerForm() {
 
     if (player_) {
         player_->Stop();
+        player_.reset();
     }
+
+    if (speaker_) {
+        speaker_->requestInterruption();
+        speaker_->wait();
+        speaker_.reset();
+    }
+
+    qDebug() << "PlayerForm::~PlayerForm() done ";
 }
 
 bool PlayerForm::openMedia(MediaSource media) {
 
     player_.reset(new FFPlayer);
     player_->SetMediaSource(media);
+    AudioDeviceFormat deviceFmt;
+    deviceFmt.channel_count = 2;
+    deviceFmt.sample_rate = 44100;
+    deviceFmt.sample_fmt = AudioSampleFormat::Int16;
+    player_->SetAudioDeviceFormat(deviceFmt);
     player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
                                         ui->openGLWidget,
                                         std::placeholders::_1));
+    player_->SetAudioFrameCallback(std::bind(&PlayerForm::playAudio, this,
+                                             std::placeholders::_1,
+                                             std::placeholders::_2, std::placeholders::_3));
+    speaker_->start();
+
     return player_->Start();
 }
+
+void PlayerForm::playAudio(char *buf, int size, long long pts) { speaker_->write(buf, size, pts); }
 
 void PlayerForm::clickPushButtonFullScreen() {
     //对pushButton实现模拟点击
@@ -46,6 +70,21 @@ void PlayerForm::clickPushButtonFullScreen() {
     // //向按钮pushButton发送鼠标左键按下事件，之后发送鼠标左键释放事件，模拟一次点击
     // QApplication::sendEvent(ui->pushButtonFullScreen, &mouseDown);
     // QApplication::sendEvent(ui->pushButtonFullScreen, &mouseUp);
+}
+
+void PlayerForm::listOutputAudioDevices() {
+    auto audio_devics = QMediaDevices::audioOutputs();
+    for (auto &dev : audio_devics) {
+        qDebug() << "audio output id " << dev.id() << ", desc "
+                 << dev.description() << ", preferred fmt "
+                 << dev.preferredFormat() << ", sample fmts "
+                 << dev.supportedSampleFormats() << ", sample rate ["
+                 << dev.minimumSampleRate() << ", " << dev.maximumSampleRate()
+                 << "], channel [" << dev.minimumChannelCount() << ", "
+                 << dev.maximumChannelCount() << "]";
+    }
+
+    speaker_.reset(new AudioSpeaker);
 }
 
 // bool MainWindow::eventFilter(QObject *watched, QEvent *event) {

@@ -1,10 +1,14 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+
 #include <QWidget>
 
-#include "player/ffplayer.h"
 #include "av_def.h"
+#include "player/ffplayer.h"
+#include "audiospeaker.h"
+
+class QIODevice;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -20,10 +24,12 @@ public:
     ~PlayerForm();
 
     bool openMedia(MediaSource media);
+    void playAudio(char *buf, int size, long long pts);
 
 private slots:
     void on_pushButtonList_toggled(bool checked);
     void on_pushButtonFullScreen_toggled(bool checked);
+
 
     // QWidget interface
 protected:
@@ -32,6 +38,7 @@ protected:
 
 private:
     void clickPushButtonFullScreen();
+    void listOutputAudioDevices();
 
 private:
     Ui::PlayerForm *ui;
@@ -40,6 +47,8 @@ private:
     QWidget *fsWidget_ = nullptr;
     QWidget *fsParent_ = nullptr;
     Qt::WindowFlags fsFlags_;
+
+    std::unique_ptr<AudioSpeaker> speaker_;
 
     std::unique_ptr<FFPlayer> player_;
 };

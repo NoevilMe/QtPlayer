@@ -61,7 +61,8 @@ FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
 
-    decode_frame_ = av_frame_alloc();
+    video_frame_ = av_frame_alloc();
+    audio_frame_ = av_frame_alloc();
 
     avutil::GetAllDevices();
 }
@@ -73,9 +74,14 @@ FFPlayer::~FFPlayer() {
     ResetDecodeContext();
     ResetHWDeviceContext();
 
-    if (decode_frame_) {
-        av_frame_free(&decode_frame_);
-        decode_frame_ = nullptr;
+    if (video_frame_) {
+        av_frame_free(&video_frame_);
+        video_frame_ = nullptr;
+    }
+
+    if (audio_frame_) {
+        av_frame_free(&audio_frame_);
+        audio_frame_ = nullptr;
     }
 }
 
@@ -93,11 +99,15 @@ bool FFPlayer::Start() {
         return false;
     }
 
-    if (!InitDecodeContext(input_codec_)) {
+    if (!InitDecodeContext()) {
         return false;
     }
 
     if (!InitSwsContext()) {
+        return false;
+    }
+
+    if (!InitSwrContext()) {
         return false;
     }
 
@@ -141,12 +151,42 @@ void FFPlayer::Stop() {
     media_source_.src.clear();
 }
 
-void FFPlayer::SetMediaSource(MediaSource media) { media_source_ = media; }
+void FFPlayer::SetMediaSource(MediaSource media) {
+    media_source_ = std::move(media);
+}
+
+void FFPlayer::SetAudioDeviceFormat(AudioDeviceFormat fmt) {
+    resample_fmt_.sample_rate = fmt.sample_rate;
+    resample_fmt_.channel_count = fmt.channel_count;
+
+    switch (fmt.sample_fmt) {
+    case AudioSampleFormat::UInt8:
+        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_U8;
+        break;
+    case AudioSampleFormat::Int16:
+        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
+        break;
+    case AudioSampleFormat::Int32:
+        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S32;
+        break;
+    case AudioSampleFormat::Float:
+        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_FLT;
+        break;
+    default:
+        //输出的采样格式。绝⼤部分声卡⽀持
+        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
+        break;
+    }
+}
+
+bool FFPlayer::ResampleFormatValid() const {
+    return resample_fmt_.channel_count > 0 && resample_fmt_.sample_rate > 0 &&
+           resample_fmt_.sample_fmt != AV_SAMPLE_FMT_NONE;
+}
 
 // https://www.cnblogs.com/feiyangqingyun/p/16875945.html
 //  ffplay -f dshow -i video="USB Video Device" -s 1280x720 -framerate 30
 bool FFPlayer::InitInputContext() {
-
     std::string url;
 
     const AVInputFormat *input_fmt = nullptr;
@@ -177,14 +217,14 @@ bool FFPlayer::InitInputContext() {
         return false;
     }
 
-    input_fmt_ctx_ = avformat_alloc_context();
+    fmt_ctx_ = avformat_alloc_context();
 
-    if (!input_fmt_ctx_) {
+    if (!fmt_ctx_) {
         logger_->error("avformat_alloc_context fail");
         return false;
     }
 
-    input_fmt_ctx_->flags |= AVFMT_FLAG_NONBLOCK; // 拔掉摄像头不阻塞
+    fmt_ctx_->flags |= AVFMT_FLAG_NONBLOCK; // 拔掉摄像头不阻塞
 
     // set input options
     AVDictionary *options = nullptr;
@@ -221,13 +261,12 @@ bool FFPlayer::InitInputContext() {
 
     util::AtExit ao([&]() { av_dict_free(&options); });
 
-    input_fmt_ctx_->interrupt_callback.opaque = this;
-    input_fmt_ctx_->interrupt_callback.callback = InterruptCallback;
+    fmt_ctx_->interrupt_callback.opaque = this;
+    fmt_ctx_->interrupt_callback.callback = InterruptCallback;
 
     interrupt_.func_start_timestamp = util::TimeMilliseconds();
 
-    auto err =
-        avformat_open_input(&input_fmt_ctx_, url.data(), input_fmt, &options);
+    auto err = avformat_open_input(&fmt_ctx_, url.data(), input_fmt, &options);
     if (err) {
         logger_->error("avformat_open_input device {}, {}, {}", url, err,
                        avutil::ErrorString(err));
@@ -246,7 +285,7 @@ bool FFPlayer::InitInputContext() {
     //    input_fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
 
     interrupt_.func_start_timestamp = util::TimeMilliseconds();
-    if (avformat_find_stream_info(input_fmt_ctx_, 0) < 0) {
+    if (avformat_find_stream_info(fmt_ctx_, 0) < 0) {
         logger_->error("failed to retrieve input stream information");
         return false;
     }
@@ -259,40 +298,54 @@ bool FFPlayer::InitInputContext() {
     logger_->debug("avformat_find_stream_info success");
 
     // 1.3 获取输入ctx
-    int video_index = -1;
-    video_index = av_find_best_stream(input_fmt_ctx_, AVMEDIA_TYPE_VIDEO, -1,
-                                      -1, nullptr, 0);
+    for (int i = 0; i < fmt_ctx_->nb_streams; ++i) {
+        auto stream = fmt_ctx_->streams[i];
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+            video_index_ < 0) {
+            video_index_ = i;
+            video_stream_ = stream;
+        } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+                   audio_index_ < 0) {
+            audio_index_ = i;
+            audio_stream_ = stream;
+        }
+    }
 
-    if (video_index < 0) {
+    if (video_index_ < 0) {
         logger_->error("no video stream in input stream");
         return false;
     }
 
-    input_video_stream_ = input_fmt_ctx_->streams[video_index];
-    logger_->info(
-        "input streams video index = {}, avg fps is {}, codec id {}",
-        video_index, input_video_stream_->avg_frame_rate.num,
-        avutil::GetCodecName(input_video_stream_->codecpar->codec_id));
+    auto video_codecpar = video_stream_->codecpar;
+    logger_->info("input streams video index = {}, codec id {}, avg fps is {}, "
+                  "pix fmt {}, resolution {}x{}, time_base {}/{}",
+                  video_index_, avutil::GetCodecName(video_codecpar->codec_id),
+                  int(video_stream_->avg_frame_rate.num /
+                      video_stream_->avg_frame_rate.den),
+                  avutil::GetPixFmtName((AVPixelFormat)video_codecpar->format),
+                  video_codecpar->width, video_codecpar->height,
+                  video_stream_->time_base.num, video_stream_->time_base.den);
 
     // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
     //  TODO:
     std::string name(fmt::format("@ {}", url));
-    av_dump_format(input_fmt_ctx_, video_index, name.data(), 0);
+    av_dump_format(fmt_ctx_, video_index_, name.data(), 0);
 
-    int audio_index = -1;
-    audio_index = av_find_best_stream(input_fmt_ctx_, AVMEDIA_TYPE_AUDIO, -1,
-                                      -1, nullptr, 0);
-    if (audio_index > 0) {
-        input_audio_stream = input_fmt_ctx_->streams[audio_index];
+    if (audio_stream_) {
+        auto audio_codecpar = audio_stream_->codecpar;
         logger_->info(
-            "input streams audio index = {}, avg fps is {}, codec id {}",
-            audio_index, input_audio_stream->avg_frame_rate.num,
-            avutil::GetCodecName(input_audio_stream->codecpar->codec_id));
+            "input streams audio index = {}, codec id {}, sample rate {}, "
+            "channels {}, sample fmt {}, bits per sample {}, time_base {}/{}",
+            audio_index_, avutil::GetCodecName(audio_codecpar->codec_id),
+            audio_codecpar->sample_rate, audio_codecpar->ch_layout.nb_channels,
+            avutil::GetSampleFmtName((AVSampleFormat)audio_codecpar->format),
+            audio_codecpar->bits_per_coded_sample, audio_stream_->time_base.num,
+            audio_stream_->time_base.den);
 
         // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
         //  TODO:
-        std::string name(fmt::format("@ {}", url));
-        av_dump_format(input_fmt_ctx_, audio_index, name.data(), 0);
+        //        std::string name(fmt::format("@ {}", url));
+        //        av_dump_format(in_fmt_ctx_, audio_index, name.data(), 0);
     }
 
     return true;
@@ -309,7 +362,7 @@ bool FFPlayer::InitInputCodec() {
 
     std::vector<AVHWDeviceType> try_hwdevice_types;
 
-    AVCodecID video_codec_id = input_video_stream_->codecpar->codec_id;
+    AVCodecID video_codec_id = video_stream_->codecpar->codec_id;
     if (video_codec_id == AV_CODEC_ID_MJPEG) {
         // windows mjpeg支持3种解码器mjpeg mjpeg_qsv mjpeg_cuvid。
         // DXVA2和D3D11VA不支持mjpeg
@@ -349,7 +402,7 @@ bool FFPlayer::InitInputCodec() {
     }
 
     std::string codec_name =
-        avutil::GetCodecName(input_video_stream_->codecpar->codec_id);
+        avutil::GetCodecName(video_stream_->codecpar->codec_id);
 
     for (auto hwtype : try_hwdevice_types) {
         std::string decoder_name =
@@ -362,12 +415,13 @@ bool FFPlayer::InitInputCodec() {
             continue;
         }
 
-        logger_->info("try input codec {}:{}", codec->name, codec->long_name);
+        logger_->info("try input video codec {}:{}", codec->name,
+                      codec->long_name);
 
         if (hwtype == AV_HWDEVICE_TYPE_NONE ||
             InitHWDeviceContext(codec, hwtype, false)) {
             hwtype_ = hwtype;
-            input_codec_ = codec;
+            video_codec_ = codec;
 
             logger_->info("select hw device {}, codec {}:{}",
                           avutil::GetHWDeviceTypeName(hwtype_), codec->name,
@@ -376,9 +430,21 @@ bool FFPlayer::InitInputCodec() {
         }
     }
 
-    if (!input_codec_) {
+    if (!video_codec_) {
         logger_->error("can not find decoder for {}", codec_name);
         return false;
+    }
+
+    if (audio_stream_) {
+        audio_codec_ = avcodec_find_decoder(audio_stream_->codecpar->codec_id);
+        if (audio_codec_) {
+            logger_->info("input audio codec {}:{}", audio_codec_->name,
+                          audio_codec_->long_name);
+        } else {
+            logger_->error(
+                "failed to find audio decoder of codec id {}",
+                avutil::GetCodecName(audio_stream_->codecpar->codec_id));
+        }
     }
 
     return true;
@@ -408,54 +474,35 @@ bool FFPlayer::InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype,
                   avutil::GetHWDeviceTypeName(hwconfig->device_type),
                   avutil::GetPixFmtName(hwconfig->pix_fmt), codec->name);
 
-    //    } else {
-    //        int err =
-    //            av_hwdevice_ctx_create(&hw_device_ctx_, hwtype_, nullptr, //
-    //            "auto"
-    //                                   nullptr, 0);
-    //        if (err) {
-    //            logger_->error("failed to av_hwdevice_ctx_create, {}",
-    //                           avutil::ErrorString(err));
-    //            return false;
-    //        }
-
-    //        hw_pix_fmt_ = AV_PIX_FMT_QSV;
-
-    //        logger_->debug("use hw pix fmt {}",
-    //        avutil::GetPixFmtName(hw_pix_fmt_));
-    //    }
-
     logger_->debug("InitHWDeviceContext success");
 
     return true;
 }
 
-bool FFPlayer::InitDecodeContext(const AVCodec *dec) {
-    input_decode_ctx_ = avcodec_alloc_context3(dec);
-    avcodec_parameters_to_context(input_decode_ctx_,
-                                  input_video_stream_->codecpar);
+bool FFPlayer::InitDecodeContext() {
+    video_decode_ctx_ = avcodec_alloc_context3(video_codec_);
+    avcodec_parameters_to_context(video_decode_ctx_, video_stream_->codecpar);
 
-    logger_->debug("input stream time_base {}, {}",
-                   input_video_stream_->time_base.num,
-                   input_video_stream_->time_base.den);
-    logger_->debug("input stream avg_frame_rate {}, {}",
-                   input_video_stream_->avg_frame_rate.num,
-                   input_video_stream_->avg_frame_rate.den);
+    logger_->debug("video input stream time_base {}, {}",
+                   video_stream_->time_base.num, video_stream_->time_base.den);
+    logger_->debug("video input stream avg_frame_rate {}, {}",
+                   video_stream_->avg_frame_rate.num,
+                   video_stream_->avg_frame_rate.den);
 
     //    input_decode_ctx_->time_base = input_video_stream_->time_base;
     //    input_decode_ctx_->framerate = input_video_stream_->avg_frame_rate;
 
-    logger_->info("input decoder time_base {}, {}",
-                  input_decode_ctx_->time_base.num,
-                  input_decode_ctx_->time_base.den);
-    logger_->info("input decoder framerate {}, {}",
-                  input_decode_ctx_->framerate.num,
-                  input_decode_ctx_->framerate.den);
+    logger_->info("video input decoder time_base {}, {}",
+                  video_decode_ctx_->time_base.num,
+                  video_decode_ctx_->time_base.den);
+    logger_->info("video input decoder framerate {}, {}",
+                  video_decode_ctx_->framerate.num,
+                  video_decode_ctx_->framerate.den);
 
     if (hw_device_ctx_) {
-        input_decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
-        input_decode_ctx_->opaque = this;
-        input_decode_ctx_->get_format = GetFormat;
+        video_decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
+        video_decode_ctx_->opaque = this;
+        video_decode_ctx_->get_format = GetFormat;
     }
 
     AVDictionary *codec_opts = nullptr;
@@ -466,43 +513,126 @@ bool FFPlayer::InitDecodeContext(const AVCodec *dec) {
         }
     });
 
-    if (input_decode_ctx_->codec_type == AVMEDIA_TYPE_VIDEO ||
-        input_decode_ctx_->codec_type == AVMEDIA_TYPE_AUDIO) {
+    if (video_decode_ctx_->codec_type == AVMEDIA_TYPE_VIDEO ||
+        video_decode_ctx_->codec_type == AVMEDIA_TYPE_AUDIO) {
         av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
     }
 
     //    input_decode_ctx_->thread_count = 8;
 
-    int err = avcodec_open2(input_decode_ctx_, dec, NULL);
+    int err = avcodec_open2(video_decode_ctx_, video_codec_, NULL);
     if (err < 0) {
-        return false;
         logger_->error("failed to avcodec_open2, {}", avutil::ErrorString(err));
         return false;
     }
 
-    input_video_stream_->discard = AVDISCARD_DEFAULT;
+    video_stream_->discard = AVDISCARD_DEFAULT;
 
-    logger_->info("decoder output fmt {}, resolution {} x {}",
-                  avutil::GetPixFmtName(input_decode_ctx_->pix_fmt),
-                  input_decode_ctx_->width, input_decode_ctx_->height);
+    logger_->info("video decoder output fmt {}, resolution {} x {}",
+                  avutil::GetPixFmtName(video_decode_ctx_->pix_fmt),
+                  video_decode_ctx_->width, video_decode_ctx_->height);
+
+    if (audio_codec_) {
+        audio_decode_ctx_ = avcodec_alloc_context3(audio_codec_);
+        avcodec_parameters_to_context(audio_decode_ctx_,
+                                      audio_stream_->codecpar);
+
+        logger_->debug("audio input stream time_base {}, {}",
+                       audio_stream_->time_base.num,
+                       audio_stream_->time_base.den);
+        logger_->debug("audio input stream avg_frame_rate {}, {}",
+                       audio_stream_->avg_frame_rate.num,
+                       audio_stream_->avg_frame_rate.den);
+
+        err = avcodec_open2(audio_decode_ctx_, audio_codec_, NULL);
+        if (err < 0) {
+            logger_->error("failed to avcodec_open2, {}",
+                           avutil::ErrorString(err));
+
+            avcodec_free_context(&audio_decode_ctx_);
+            audio_decode_ctx_ = nullptr;
+        } else {
+            logger_->info(
+                "audio decoder time base {}/{}, output fmt {}, sample rate {}, "
+                "channels {}, "
+                "channel layout {}",
+                audio_decode_ctx_->time_base.num,
+                audio_decode_ctx_->time_base.den,
+                avutil::GetSampleFmtName(audio_decode_ctx_->sample_fmt),
+                audio_decode_ctx_->sample_rate,
+                audio_decode_ctx_->ch_layout.nb_channels,
+                avutil::ChannelLayoutDescribe(&audio_decode_ctx_->ch_layout));
+        }
+    }
 
     logger_->debug("InitInputDecodeContext success");
     return true;
 }
 
+bool FFPlayer::InitSwrContext() {
+    if (!audio_decode_ctx_)
+        return true;
+
+    if (!ResampleFormatValid()) {
+        logger_->warn("resample format is not valid");
+        return true;
+    }
+
+    // 创建 SwrContext 对象
+    AVChannelLayout out_ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 输出的layout,
+    av_channel_layout_default(&out_ch_layout, resample_fmt_.channel_count);
+
+    AVChannelLayout in_ch_layout;
+    av_channel_layout_copy(&in_ch_layout, &audio_decode_ctx_->ch_layout);
+
+    int ret = swr_alloc_set_opts2(&swr_ctx_, &out_ch_layout,
+                                  resample_fmt_.sample_fmt, //输出的采样格式。
+                                  resample_fmt_.sample_rate, //输出采样率
+                                  &in_ch_layout, audio_decode_ctx_->sample_fmt,
+                                  audio_decode_ctx_->sample_rate, 0, nullptr);
+    if (ret < 0) {
+        logger_->error("swr_alloc_set_opts2 fail, {}",
+                       avutil::ErrorString(ret));
+        return false;
+    }
+
+    /* create resampler context 方式2 */
+    //    swr_ctx_ = swr_alloc();
+    //    if (!swr_ctx_) {
+    //        logger_->error("Could not allocate resampler context");
+    //        return false;
+    //    }
+
+    /* set options */
+    //    av_opt_set_chlayout(swr_ctx_, "in_chlayout", &src_ch_layout, 0);
+    //    av_opt_set_int(swr_ctx_, "in_sample_rate", src_rate, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "in_sample_fmt", src_sample_fmt, 0);
+    //    av_opt_set_chlayout(swr_ctx_, "out_chlayout", &dst_ch_layout, 0);
+    //    av_opt_set_int(swr_ctx_, "out_sample_rate", dst_rate, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "out_sample_fmt", dst_sample_fmt, 0);
+
+    /* initialize the resampling context */
+    if ((ret = swr_init(swr_ctx_)) < 0) {
+        logger_->error("swr_init fail, {}", avutil::ErrorString(ret));
+        return false;
+    }
+
+    return true;
+}
+
 bool FFPlayer::InitSwsContext() {
     if (hwtype_ == AV_HWDEVICE_TYPE_NONE &&
-        input_decode_ctx_->pix_fmt != sws_fmt_) {
+        video_decode_ctx_->pix_fmt != sws_fmt_) {
         // AV_PIX_FMT_YUV420P
-        sws_width_ = input_decode_ctx_->width >> 2 << 2; // align = 4
-        sws_height_ = input_decode_ctx_->height;
+        sws_width_ = video_decode_ctx_->width >> 2 << 2; // align = 4
+        sws_height_ = video_decode_ctx_->height;
 
         logger_->debug("sws_scale dest {}x{}, pix_fmt {}", sws_width_,
                        sws_height_, avutil::GetPixFmtName(sws_fmt_));
 
         sws_ctx_ =
-            sws_getContext(input_decode_ctx_->width, input_decode_ctx_->height,
-                           input_decode_ctx_->pix_fmt, sws_width_, sws_height_,
+            sws_getContext(video_decode_ctx_->width, video_decode_ctx_->height,
+                           video_decode_ctx_->pix_fmt, sws_width_, sws_height_,
                            sws_fmt_, SWS_BICUBIC, NULL, NULL, NULL);
         if (!sws_ctx_) {
             logger_->error("sws_getContext fail");
@@ -516,22 +646,28 @@ bool FFPlayer::InitSwsContext() {
 }
 
 void FFPlayer::ResetInputContext() {
-    if (input_fmt_ctx_) {
-        avformat_close_input(&input_fmt_ctx_);
-        avformat_free_context(input_fmt_ctx_);
-        input_fmt_ctx_ = nullptr;
+    if (fmt_ctx_) {
+        avformat_close_input(&fmt_ctx_);
+        avformat_free_context(fmt_ctx_);
+        fmt_ctx_ = nullptr;
     }
 }
 
 void FFPlayer::ResetDecodeContext() {
-    if (input_decode_ctx_) {
-        if (input_decode_ctx_->hw_device_ctx) {
-            av_buffer_unref(&input_decode_ctx_->hw_device_ctx);
+    if (video_decode_ctx_) {
+        if (video_decode_ctx_->hw_device_ctx) {
+            av_buffer_unref(&video_decode_ctx_->hw_device_ctx);
         }
 
-        avcodec_close(input_decode_ctx_);
-        avcodec_free_context(&input_decode_ctx_);
-        input_decode_ctx_ = nullptr;
+        avcodec_close(video_decode_ctx_);
+        avcodec_free_context(&video_decode_ctx_);
+        video_decode_ctx_ = nullptr;
+    }
+
+    if (audio_decode_ctx_) {
+        avcodec_close(audio_decode_ctx_);
+        avcodec_free_context(&audio_decode_ctx_);
+        audio_decode_ctx_ = nullptr;
     }
 }
 
@@ -549,7 +685,14 @@ void FFPlayer::ResetSwsContext() {
     }
 }
 
-bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
+void FFPlayer::ResetSwrContext() {
+    if (swr_ctx_) {
+        swr_free(&swr_ctx_);
+        swr_ctx_ = nullptr;
+    }
+}
+
+bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
     if (!pkt || pkt->size <= 0)
         return false;
 
@@ -557,7 +700,7 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
     pkt->dts = pkt->pts = count++;
     pkt->duration = 1;
 
-    int ret = avcodec_send_packet(input_decode_ctx_, pkt);
+    int ret = avcodec_send_packet(video_decode_ctx_, pkt);
     if (AVERROR(EAGAIN) == ret) {
         logger_->error("send packet failure, AVERROR(EAGAIN), input is not "
                        "accepted in the current state");
@@ -583,7 +726,7 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
     logger_->trace("avcodec_send_packet ok");
 
     while (ret >= 0) {
-        ret = avcodec_receive_frame(input_decode_ctx_, decode_frame_);
+        ret = avcodec_receive_frame(video_decode_ctx_, video_frame_);
 
         if (pkt && ret == AVERROR(EAGAIN)) {
             break;
@@ -598,29 +741,29 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
         ts_decode_ = util::TimeMilliseconds();
         logger_->debug("decode cost {}", ts_decode_ - ts_get_);
 
-        util::AtExit r([&]() { av_frame_unref(decode_frame_); });
+        util::AtExit r([&]() { av_frame_unref(video_frame_); });
 
         logger_->trace(
             "avcodec_receive_frame ok, fmt {}, resolution {}x{}",
-            avutil::GetPixFmtName((AVPixelFormat)decode_frame_->format),
-            decode_frame_->width, decode_frame_->height);
+            avutil::GetPixFmtName((AVPixelFormat)video_frame_->format),
+            video_frame_->width, video_frame_->height);
 
         AVFrame *data_frame = nullptr;
-        if (hw_pix_fmt_ == decode_frame_->format) {
+        if (hw_pix_fmt_ == video_frame_->format) {
             logger_->debug(
                 "hw frame {}, color_primaries {}, w {}, h {}, "
                 "yw {}, uw {}, vw {}",
-                avutil::GetPixFmtName((AVPixelFormat)decode_frame_->format),
-                decode_frame_->color_primaries, decode_frame_->width,
-                decode_frame_->height, decode_frame_->linesize[0],
-                decode_frame_->linesize[1], decode_frame_->linesize[2]);
+                avutil::GetPixFmtName((AVPixelFormat)video_frame_->format),
+                video_frame_->color_primaries, video_frame_->width,
+                video_frame_->height, video_frame_->linesize[0],
+                video_frame_->linesize[1], video_frame_->linesize[2]);
 
             // 如果采用的硬件加速剂，则调用avcodec_receive_frame()函数后，解码后的数据还在GPU中，所以需要通过此函数
             // 将GPU中的数据转移到CPU中来
             data_frame = av_frame_alloc();
 
             if (map_hw_frame_) {
-                int ret = av_hwframe_map(data_frame, decode_frame_,
+                int ret = av_hwframe_map(data_frame, video_frame_,
                                          AV_HWFRAME_MAP_READ); // 映射硬件数据帧
                 if (ret < 0) {
                     logger_->error(
@@ -633,8 +776,8 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                 ts_hw_ = util::TimeMilliseconds();
                 logger_->debug("map cost {}", ts_hw_ - ts_decode_);
 
-                data_frame->width = decode_frame_->width;
-                data_frame->height = decode_frame_->height;
+                data_frame->width = video_frame_->width;
+                data_frame->height = video_frame_->height;
 
                 logger_->debug(
                     "mapped frame {}, color_primaries {}, w {}, h {}, "
@@ -644,7 +787,7 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                     data_frame->height, data_frame->linesize[0],
                     data_frame->linesize[1], data_frame->linesize[2]);
             } else {
-                if ((ret = av_hwframe_transfer_data(data_frame, decode_frame_,
+                if ((ret = av_hwframe_transfer_data(data_frame, video_frame_,
                                                     0)) < 0) {
                     logger_->error("av_hwframe_transfer_data fail, {}",
                                    avutil::ErrorString(ret));
@@ -683,8 +826,8 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                 // }
 
                 int h =
-                    sws_scale(sws_ctx_, decode_frame_->data,
-                              decode_frame_->linesize, 0, decode_frame_->height,
+                    sws_scale(sws_ctx_, video_frame_->data,
+                              video_frame_->linesize, 0, video_frame_->height,
                               data_frame->data, data_frame->linesize);
                 if (h <= 0 || h != data_frame->height) {
                     logger_->error("sws_scale height error {}", h);
@@ -700,7 +843,7 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
                     data_frame->width, data_frame->height);
 
             } else {
-                data_frame = decode_frame_;
+                data_frame = video_frame_;
             }
         }
 
@@ -711,9 +854,179 @@ bool FFPlayer::HandleInputFrame(AVPacket *pkt) {
             frame_cb_(data_frame);
         }
 
-        if (data_frame != decode_frame_) {
+        if (data_frame != video_frame_) {
             av_frame_free(&data_frame);
         }
+    }
+
+    return true;
+}
+
+bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
+    if (!pkt || pkt->size <= 0)
+        return false;
+
+        // FIXME:
+    // pkt->dts = pkt->pts = audio_decode_dts_++;
+    // pkt->duration = 1;
+
+    int ret = avcodec_send_packet(audio_decode_ctx_, pkt);
+    if (AVERROR(EAGAIN) == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR(EAGAIN), input is not "
+            "accepted in the current state");
+        return false;
+    } else if (AVERROR_EOF == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR_EOF, the decoder has been "
+            "flushed, and no new packets can be sent to it (also "
+            "returned if more than 1 flush packet is sent");
+        return false;
+    } else if (AVERROR(EINVAL) == ret) {
+        logger_->error("send audio packet failure, AVERROR(EINVAL), codec not "
+                       "opened, it is an encoder, or requires flush");
+        return false;
+    } else if (AVERROR(ENOMEM) == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR(ENOMEM), failed to add "
+            "packet to internal queue, or similar other errors: "
+            "legitimate decoding errors");
+        return false;
+    } else if (ret < 0) {
+        logger_->error("send packet failure, {}", avutil::ErrorString(ret));
+        return false;
+    }
+    logger_->trace("audio avcodec_send_packet ok");
+
+    while (ret >= 0) {
+        ret = avcodec_receive_frame(audio_decode_ctx_, audio_frame_);
+
+        if (pkt && ret == AVERROR(EAGAIN)) {
+            break;
+        } else if (ret == AVERROR_EOF) {
+            break;
+        } else if (ret < 0) {
+            logger_->error("avcodec_receive_frame audio frame failure, {}",
+                           avutil::ErrorString(ret));
+            return false;
+        }
+
+        util::AtExit r([&]() { av_frame_unref(audio_frame_); });
+
+        logger_->trace(
+            "audio avcodec_receive_frame ok, fmt {}, nb_samples {}, duration "
+            "{}, pts {}",
+            avutil::GetSampleFmtName((AVSampleFormat)audio_frame_->format),
+            audio_frame_->nb_samples, audio_frame_->duration,
+            audio_frame_->pts);
+
+        // https://www.cnblogs.com/zjacky/p/16529648.html 可以写入AVFrame
+
+        // https://blog.csdn.net/u012117034/article/details/127537875
+        //        auto out_count = (int64_t)audio_frame_->nb_samples *
+        //                             resample_fmt_.sample_rate /
+        //                             audio_frame_->sample_rate +
+        //                         256;
+
+        // 采样数空间留有余量
+        auto out_count = audio_frame_->nb_samples * 3 / 2;
+
+        auto audio_buf_len =
+            av_samples_get_buffer_size(nullptr, resample_fmt_.channel_count,
+                                       out_count, resample_fmt_.sample_fmt, 0);
+        logger_->trace("out count {}, av_samples_get_buffer_size out size {} ",
+                       out_count, audio_buf_len);
+
+        uint8_t *audio_buf = new uint8_t[audio_buf_len];
+
+        // av_samples_alloc_array_and_samples
+        // av_samples_alloc和av_samples_get_buffer_size的计算空间是一样的。
+        //        int audio_buf_len =
+        //            av_samples_alloc(&audio_buf, nullptr,
+        //            resample_fmt_.channel_count,
+        //                             out_count, resample_fmt_.sample_fmt, 0);
+        //        logger_->trace("av_samples_alloc nb_samples {}, audio_buf_len
+        //        {}",
+        //                       out_count, audio_buf_len);
+
+        // 对于音频来说，extended_data 和
+        // data是一样的。音频更常用extended_data来表示
+        const uint8_t **in_data =
+            (const uint8_t **)audio_frame_->extended_data; // audio_frame_->data
+        int in_count = audio_frame_->nb_samples;
+
+        // swr_convert_frame
+        int out_nb_samples =
+            swr_convert(swr_ctx_, &audio_buf, audio_buf_len, in_data, in_count);
+        logger_->trace("out_nb_samples {}", out_nb_samples);
+
+        int data_size = out_nb_samples * resample_fmt_.channel_count *
+                        av_get_bytes_per_sample(resample_fmt_.sample_fmt);
+        logger_->trace("data size {}", data_size);
+
+        if (out_nb_samples < 0) {
+            logger_->error("swr_convert error, {}",
+                           avutil::ErrorString(out_nb_samples));
+        }
+
+        // QObject::startTimer: Timers cannot be started from another thread
+        if (audio_frame_cb_) {
+            audio_frame_cb_((char *)audio_buf, data_size, audio_frame_->pts);
+        }
+
+        std::this_thread::sleep_for(std::chrono::microseconds(23220));
+
+        //        av_free(audio_buf);
+
+        logger_->info("destroy ...");
+
+        /*
+        // 转码音频帧
+        // 计算转码后的音频数据大小
+        int dstNbSamples = av_rescale_rnd(swr_get_delay(swrCtx, 44100) +
+        aacFrame->nb_samples, 44100, 44100, AV_ROUND_UP); int
+        dstBufferSize = av_samples_get_buffer_size(nullptr, 2,
+        dstNbSamples, AV_SAMPLE_FMT_S16, 0);
+
+        // 分配转码后的音频数据缓冲区
+        uint8_t *dstBuffer = static_cast<uint8_t
+        *>(av_malloc(dstBufferSize));
+
+        // 进行音频转码
+        int numSamples = swr_convert(audioSwsContext, &dstBuffer,
+        dstNbSamples, const_cast<const uint8_t **>(pAudioFrame->data),
+        pAudioFrame->nb_samples); if (numSamples < 0) { qDebug() <<
+        "音频转码失败"; av_freep(&dstBuffer);
+        }
+        else{
+            // 释放资源
+            // 将音频帧数据写入音频输出设备
+            outputDevice->write((const char *)dstBuffer, dstBufferSize);
+        }
+
+        // 计算音频帧播放时长
+        AVRational timeBase =
+        pFormatContext->streams[audioStream]->time_base; int64_t pts =
+        av_frame_get_best_effort_timestamp(pAudioFrame); double time =
+        av_q2d(timeBase) * pts;
+
+        // 延时播放下一帧
+        QEventLoop loop;
+        QTimer::singleShot(time * 1000, &loop, [&]() { loop.quit(); });
+        loop.exec(); */
+
+        // uint8_t *data[2] = {0};
+        //                if(!pcm)pcm = new
+        //                uint8_t[frame->nb_samples*2*2]; data[0] = pcm;
+        ////                int swr_convert(struct SwrContext *s,
+        /// uint8_t **out,
+        /// int out_count, / const uint8_t **in , int in_count);
+
+        //               ret = swr_convert(actx,
+        //                                   data, frame->nb_samples,
+        //                                   //输出 (const
+        //                                   uint8_t**)frame->data,frame->nb_samples
+        //                                   //输入
     }
 
     return true;
@@ -769,33 +1082,49 @@ void FFPlayer::ThreadFunc() {
         int err = 0;
         while (running_.load()) {
             interrupt_.func_start_timestamp = util::TimeMilliseconds();
-            err = av_read_frame(input_fmt_ctx_, pkt);
+            err = av_read_frame(fmt_ctx_, pkt);
             if (0 == err) {
                 // pkt->time_base = {1, 10000000};
                 logger_->trace("-----------------------------");
-                logger_->trace("av_read_frame ok, size {}, timebase {}, {}",
-                               pkt->size, pkt->time_base.num,
-                               pkt->time_base.den);
+                logger_->trace("av_read_frame ok, index {}, size {}, timebase "
+                               "{}/{}, pts {}, duration {}",
+                               pkt->stream_index, pkt->size, pkt->time_base.num,
+                               pkt->time_base.den, pkt->pts, pkt->duration);
 
-                ts_get_ = util::TimeMilliseconds();
+                if (pkt->stream_index == video_index_) {
+                    ts_get_ = util::TimeMilliseconds();
 
-                // std::fstream
-                // fs(std::to_string(ts_get_)+".jpg",std::ios_base::out|std::ios_base::binary);
-                // fs.write((const char*)pkt->data,pkt->size);
-                // fs.close();
+                    auto pts_dur = pkt->pts - video_pts;
+                    logger_->trace("video frame, pts {}, pts duration {}",
+                                   pkt->pts, pts_dur);
+                    video_pts = pkt->pts;
 
-                // int width, height, nrChannels;
-                // unsigned char *data = stbi_load_from_memory(
-                //     pkt->data, pkt->size, &width, &height, &nrChannels, 0);
+                    // std::fstream
+                    // fs(std::to_string(ts_get_)+".jpg",std::ios_base::out|std::ios_base::binary);
+                    // fs.write((const char*)pkt->data,pkt->size);
+                    // fs.close();
 
-                // auto ts_decode = util::TimeMilliseconds();
-                // logger_->debug(
-                //     "decode mjpeg cost {}, width {}, height {}, nrch {}",
-                //     ts_decode - ts_get_, width, height, nrChannels);
-                // stbi_image_free(data);
+                    // int width, height, nrChannels;
+                    // unsigned char *data = stbi_load_from_memory(
+                    //     pkt->data, pkt->size, &width, &height, &nrChannels,
+                    //     0);
 
-                if (pkt->stream_index == input_video_stream_->index) {
-                    this->HandleInputFrame(pkt);
+                    // auto ts_decode = util::TimeMilliseconds();
+                    // logger_->debug(
+                    //     "decode mjpeg cost {}, width {}, height {}, nrch {}",
+                    //     ts_decode - ts_get_, width, height, nrChannels);
+                    // stbi_image_free(data);
+
+                    this->HandleVideoFrame(pkt);
+                } else if (pkt->stream_index == audio_index_) {
+                    auto pts_dur = pkt->pts - audio_pts;
+                    logger_->trace(
+                        "audio frame, pts {}, pts duration {}, ts duration {}",
+                        pkt->pts, pts_dur,
+                        pts_dur * av_q2d(audio_stream_->time_base));
+                    audio_pts = pkt->pts;
+
+                    this->HandleAudioFrame(pkt);
                 }
 
                 av_packet_unref(pkt);

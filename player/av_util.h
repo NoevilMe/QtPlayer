@@ -11,10 +11,12 @@ extern "C" {
 namespace avutil {
 std::string ErrorString(int err);
 std::string GetPixFmtName(enum AVPixelFormat pix_fmt);
+std::string GetSampleFmtName(enum AVSampleFormat sample_fmt);
 std::string GetHWDeviceTypeName(enum AVHWDeviceType type);
 std::string GetCodecName(enum AVCodecID id);
 AVHWDeviceType GetDefaultHWDeviceType();
 std::string GetDecoderSuffixByHWDeviceType(AVHWDeviceType type);
+std::string ChannelLayoutDescribe(const AVChannelLayout *ch_layout);
 void GetAllDevices();
 } // namespace avutil
 

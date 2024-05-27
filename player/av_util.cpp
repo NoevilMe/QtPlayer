@@ -20,7 +20,21 @@ std::string ErrorString(int err) {
 }
 
 std::string GetPixFmtName(AVPixelFormat pix_fmt) {
-    return av_get_pix_fmt_name(pix_fmt);
+    const char *name = av_get_pix_fmt_name(pix_fmt);
+    if (name) {
+        return std::string(name);
+    } else {
+        return std::string();
+    }
+}
+
+std::string GetSampleFmtName(AVSampleFormat sample_fmt) {
+    const char *name = av_get_sample_fmt_name(sample_fmt);
+    if (name) {
+        return std::string(name);
+    } else {
+        return std::string();
+    }
 }
 
 std::string GetHWDeviceTypeName(enum AVHWDeviceType type) {
@@ -92,6 +106,14 @@ std::string GetDecoderSuffixByHWDeviceType(AVHWDeviceType type) {
         break;
     }
     return suffix;
+}
+
+std::string ChannelLayoutDescribe(const AVChannelLayout *ch_layout) {
+    char buf[100] = {0};
+    if (av_channel_layout_describe(ch_layout, buf, 100) < 0) {
+        return std::string();
+    }
+    return std::string(buf);
 }
 
 } // namespace avutil

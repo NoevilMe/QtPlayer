@@ -9,13 +9,13 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia)
 
 if(QT_VERSION VERSION_LESS 6.0)
     message("< Qt6.0")
 else()
     message(">= Qt6.0")
-    find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
+    find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Multimedia Widgets OpenGL OpenGLWidgets)
 endif()
 
 
@@ -43,6 +43,8 @@ set(PROJECT_SOURCES
         ui/openmediadialog.ui
         ui/yuvvideowidget.cpp
         ui/yuvvideowidget.h
+        ui/audiospeaker.h
+        ui/audiospeaker.cpp
         player/av_util.cpp
         player/av_util.h
         player/ffplayer.cpp
@@ -58,6 +60,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
+
 
 
     )
@@ -78,7 +81,7 @@ endif()
 
 
 qm_configure_target(${PROJECT_NAME}
-    QT_LINKS Widgets OpenGL OpenGLWidgets
+    QT_LINKS Widgets Multimedia OpenGL OpenGLWidgets
     LINKS QWKCore QWKWidgets WindowBar
 )
 
