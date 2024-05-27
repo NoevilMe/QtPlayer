@@ -24,7 +24,7 @@ public:
     ~PlayerForm();
 
     bool openMedia(MediaSource media);
-    void playAudio(char *buf, int size, long long pts);
+    void playAudio(char *buf, int size, double clock);
 
 private slots:
     void on_pushButtonList_toggled(bool checked);

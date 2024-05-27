@@ -46,9 +46,13 @@ public:
         frame_cb_ = cb;
     }
 
-    void SetAudioFrameCallback(
-        const std::function<void(char *, int, long long)> &cb) {
+    void
+    SetAudioFrameCallback(const std::function<void(char *, int, double)> &cb) {
         audio_frame_cb_ = cb;
+    }
+
+    void SetAudioClockCallback(const std::function<double()> &cb) {
+        audio_clock_cb_ = cb;
     }
 
 protected:
@@ -126,7 +130,8 @@ protected:
     std::atomic_bool running_;
     std::thread thd_;
     std::function<void(AVFrame *)> frame_cb_;
-    std::function<void(char *, int, long long)> audio_frame_cb_;
+    std::function<void(char *, int, double)> audio_frame_cb_;
+    std::function<double()> audio_clock_cb_;
     std::shared_ptr<spdlog::logger> logger_;
 };
 

@@ -696,10 +696,6 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
     if (!pkt || pkt->size <= 0)
         return false;
 
-    static int count = 1;
-    pkt->dts = pkt->pts = count++;
-    pkt->duration = 1;
-
     int ret = avcodec_send_packet(video_decode_ctx_, pkt);
     if (AVERROR(EAGAIN) == ret) {
         logger_->error("send packet failure, AVERROR(EAGAIN), input is not "
@@ -744,9 +740,9 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
         util::AtExit r([&]() { av_frame_unref(video_frame_); });
 
         logger_->trace(
-            "avcodec_receive_frame ok, fmt {}, resolution {}x{}",
+            "avcodec_receive_frame ok, fmt {}, resolution {}x{}, pts {}",
             avutil::GetPixFmtName((AVPixelFormat)video_frame_->format),
-            video_frame_->width, video_frame_->height);
+            video_frame_->width, video_frame_->height, video_frame_->pts);
 
         AVFrame *data_frame = nullptr;
         if (hw_pix_fmt_ == video_frame_->format) {
@@ -776,6 +772,7 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
                 ts_hw_ = util::TimeMilliseconds();
                 logger_->debug("map cost {}", ts_hw_ - ts_decode_);
 
+                // map之后的宽高是没设置的
                 data_frame->width = video_frame_->width;
                 data_frame->height = video_frame_->height;
 
@@ -794,17 +791,21 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
                     return false;
                 }
 
+                // pts需要设置
+                data_frame->pts = video_frame_->pts;
+
                 ts_hw_ = util::TimeMilliseconds();
 
                 logger_->debug("transfer cost {}", ts_hw_ - ts_decode_);
 
                 logger_->debug(
                     "transfer frame {}, color_primaries {}, w {}, h {}, "
-                    "yw {}, uw {}, vw {}",
+                    "yw {}, uw {}, vw {}, pts {}",
                     av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
                     data_frame->color_primaries, data_frame->width,
                     data_frame->height, data_frame->linesize[0],
-                    data_frame->linesize[1], data_frame->linesize[2]);
+                    data_frame->linesize[1], data_frame->linesize[2],
+                    data_frame->pts);
             }
 
         } else {
@@ -851,6 +852,28 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
             ts_cb_ = util::TimeMilliseconds();
             logger_->debug("handle frame cost {}", ts_cb_ - ts_get_);
 
+            auto video_clock =
+                data_frame->pts * av_q2d(video_stream_->time_base);
+            auto audio_clock = audio_clock_cb_();
+
+            auto diff = video_clock - audio_clock;
+            if (diff > 0.04) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds((long long)(diff * 1000)));
+
+                audio_clock = audio_clock_cb_();
+
+                logger_->info(
+                    "video frame pts {}, clock {}, audio clock {}, diff {}",
+                    data_frame->pts, video_clock, audio_clock,
+                    video_clock - audio_clock);
+            } else {
+                logger_->info(
+                    "video frame pts {}, clock {}, audio clock {}, diff {}",
+                    data_frame->pts, video_clock, audio_clock,
+                    video_clock - audio_clock);
+            }
+
             frame_cb_(data_frame);
         }
 
@@ -866,7 +889,7 @@ bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
     if (!pkt || pkt->size <= 0)
         return false;
 
-        // FIXME:
+    // FIXME:
     // pkt->dts = pkt->pts = audio_decode_dts_++;
     // pkt->duration = 1;
 
@@ -970,8 +993,9 @@ bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
         }
 
         // QObject::startTimer: Timers cannot be started from another thread
+        double clock = audio_frame_->pts * av_q2d(audio_stream_->time_base);
         if (audio_frame_cb_) {
-            audio_frame_cb_((char *)audio_buf, data_size, audio_frame_->pts);
+            audio_frame_cb_((char *)audio_buf, data_size, clock);
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(23220));

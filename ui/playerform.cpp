@@ -49,15 +49,18 @@ bool PlayerForm::openMedia(MediaSource media) {
     player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
                                         ui->openGLWidget,
                                         std::placeholders::_1));
-    player_->SetAudioFrameCallback(std::bind(&PlayerForm::playAudio, this,
-                                             std::placeholders::_1,
-                                             std::placeholders::_2, std::placeholders::_3));
+    player_->SetAudioFrameCallback(
+        std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
+                  std::placeholders::_2, std::placeholders::_3));
+    player_->SetAudioClockCallback([=]() { return speaker_->AudioClock(); });
     speaker_->start();
 
     return player_->Start();
 }
 
-void PlayerForm::playAudio(char *buf, int size, long long pts) { speaker_->write(buf, size, pts); }
+void PlayerForm::playAudio(char *buf, int size, double clock) {
+    speaker_->write(buf, size, clock);
+}
 
 void PlayerForm::clickPushButtonFullScreen() {
     //对pushButton实现模拟点击

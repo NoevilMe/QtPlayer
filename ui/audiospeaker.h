@@ -7,23 +7,29 @@
 #include <QThread>
 #include <QWaitCondition>
 
+#include <atomic>
+
 class AudioSpeaker : public QThread {
     Q_OBJECT
 public:
     explicit AudioSpeaker(QObject *parent = nullptr);
     ~AudioSpeaker();
 
-    QAudioFormat PreferredFormat();
+    void Stop();
 
-    void write(const char *data, int len, long long pts);
-    long long AudioClock();
+    QAudioDevice DefaultDevice();
+    QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
+
+    // 内部释放data
+    void write(const char *data, int len, double clock);
+    double AudioClock();
 
     // QThread interface
 protected:
     struct AudioSpeakerFrame {
         const char *buf;
         int length;
-        long long pts;
+        double clock;
     };
 
     void run() override;
@@ -35,7 +41,10 @@ protected:
     void channelBytesWritten(int channel, qint64 bytes);
 
 private:
-    QAudioFormat preferred_format_;
+    QAudioFormat format_;
+    long long buffer_size_;
+
+    std::atomic<double> queued_clock_;
 
     QQueue<AudioSpeakerFrame> queue_;
     QMutex mutex_;
