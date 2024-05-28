@@ -85,7 +85,8 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
         return;
 
     if ((AVPixelFormat)frame->format != AV_PIX_FMT_YUV420P &&
-        (AVPixelFormat)frame->format != AV_PIX_FMT_NV12 &&(AVPixelFormat)frame->format != AV_PIX_FMT_YUVJ420P ) {
+        (AVPixelFormat)frame->format != AV_PIX_FMT_NV12 &&
+        (AVPixelFormat)frame->format != AV_PIX_FMT_YUVJ420P) {
         qDebug() << "unsupported frame " << frame->format;
         return;
     }
@@ -106,18 +107,25 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
     //     //                 frame->width);
     //     // }
 
+    //     // file_.write((char *)frame->data[0], frame->linesize[0] *
+    //     frame->height);
+    //     // file_.write((char *)frame->data[1], frame->linesize[1] *
+    //     frame->height / 2);
+    //     // file_.write((char *)frame->data[2], frame->linesize[2] *
+    //     frame->height / 2);
 
-    //     // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
-    //     // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
-    //     // file_.write((char *)frame->data[2], frame->linesize[2] * frame->height / 2);
-
-    //     // file_.write((char *)frame->data[0], frame->linesize[0] * frame->height);
-    //     // file_.write((char *)frame->data[1], frame->linesize[1] * frame->height / 2);
-    //     file_.flush();
+    //     // file_.write((char *)frame->data[0], frame->linesize[0] *
+    //     frame->height);
+    //     // file_.write((char *)frame->data[1], frame->linesize[1] *
+    //     frame->height / 2); file_.flush();
     // }
 
     // https://blog.csdn.net/chinabinlang/article/details/7804808
     resetVideoSize(frame->linesize[0], frame->height);
+    // resetVideoSize(frame->width, frame->height);
+
+    qDebug() << "width " << frame->width << ", height " << frame->height
+             << ", line size " << frame->linesize[0];
 
     pixFormat_ = frame->format;
     if (AV_PIX_FMT_YUV420P == pixFormat_ || AV_PIX_FMT_YUVJ420P == pixFormat_) {
@@ -228,7 +236,7 @@ void YuvVideoWidget::resizeGL(int w, int h) {
         trans_.scale(videoRatio_ / winRatio, 1.0f, 1.0f);
     } else {
         // trans_.scale(1.0f, 1 - ((videoRatio_ - winRatio) / 2), 1.0f);
-        trans_.scale(1.0f, winRatio/videoRatio_, 1.0f);
+        trans_.scale(1.0f, winRatio / videoRatio_, 1.0f);
     }
 
     //    qDebug() << "resizeGL " << w << " x " << h;

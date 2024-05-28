@@ -61,7 +61,6 @@ FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
 
-    video_frame_ = av_frame_alloc();
     audio_frame_ = av_frame_alloc();
 
     avutil::GetAllDevices();
@@ -72,17 +71,13 @@ FFPlayer::~FFPlayer() {
 
     ResetInputContext();
     ResetDecodeContext();
-    ResetHWDeviceContext();
-
-    if (video_frame_) {
-        av_frame_free(&video_frame_);
-        video_frame_ = nullptr;
-    }
 
     if (audio_frame_) {
         av_frame_free(&audio_frame_);
         audio_frame_ = nullptr;
     }
+
+    logger_->debug("~FFPlayer destroyed");
 }
 
 bool FFPlayer::Start() {
@@ -147,6 +142,10 @@ void FFPlayer::Stop() {
         thd_.join();
     }
 
+    if (video_player_) {
+        video_player_.reset();
+    }
+
     media_source_.type = MediaType::kMediaNone;
     media_source_.src.clear();
 }
@@ -177,6 +176,25 @@ void FFPlayer::SetAudioDeviceFormat(AudioDeviceFormat fmt) {
         resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
         break;
     }
+}
+
+void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
+    auto audio_clock = audio_clock_cb_();
+    auto diff = clock - audio_clock;
+    if (diff > 0.04) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds((long long)(diff * 1000)));
+
+        audio_clock = audio_clock_cb_();
+
+        logger_->info("video frame pts {}, clock {}, audio clock {}, diff {}",
+                      frame->pts, clock, audio_clock, clock - audio_clock);
+    } else {
+        logger_->info("video frame pts {}, clock {}, audio clock {}, diff {}",
+                      frame->pts, clock, audio_clock, clock - audio_clock);
+    }
+
+    frame_cb_(frame);
 }
 
 bool FFPlayer::ResampleFormatValid() const {
@@ -298,12 +316,15 @@ bool FFPlayer::InitInputContext() {
     logger_->debug("avformat_find_stream_info success");
 
     // 1.3 获取输入ctx
-    for (int i = 0; i < fmt_ctx_->nb_streams; ++i) {
+    for (unsigned int i = 0; i < fmt_ctx_->nb_streams; ++i) {
         auto stream = fmt_ctx_->streams[i];
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
-            video_index_ < 0) {
-            video_index_ = i;
-            video_stream_ = stream;
+            !video_player_) {
+            video_player_.reset(new VideoPlayer(i, stream));
+            video_player_->SetFrameCallback(
+                std::bind(&FFPlayer::PlayVideoFrame, this,
+                          std::placeholders::_1, std::placeholders::_2));
+
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
                    audio_index_ < 0) {
             audio_index_ = i;
@@ -311,25 +332,17 @@ bool FFPlayer::InitInputContext() {
         }
     }
 
-    if (video_index_ < 0) {
+    if (video_player_ < 0) {
         logger_->error("no video stream in input stream");
         return false;
     }
 
-    auto video_codecpar = video_stream_->codecpar;
-    logger_->info("input streams video index = {}, codec id {}, avg fps is {}, "
-                  "pix fmt {}, resolution {}x{}, time_base {}/{}",
-                  video_index_, avutil::GetCodecName(video_codecpar->codec_id),
-                  int(video_stream_->avg_frame_rate.num /
-                      video_stream_->avg_frame_rate.den),
-                  avutil::GetPixFmtName((AVPixelFormat)video_codecpar->format),
-                  video_codecpar->width, video_codecpar->height,
-                  video_stream_->time_base.num, video_stream_->time_base.den);
+    video_player_->LogInput();
 
     // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
     //  TODO:
     std::string name(fmt::format("@ {}", url));
-    av_dump_format(fmt_ctx_, video_index_, name.data(), 0);
+    av_dump_format(fmt_ctx_, 0, name.data(), 0);
 
     if (audio_stream_) {
         auto audio_codecpar = audio_stream_->codecpar;
@@ -352,87 +365,85 @@ bool FFPlayer::InitInputContext() {
 }
 
 bool FFPlayer::InitInputCodec() {
-    // decoder
-    // AV_HWDEVICE_TYPE_DXVA2 支持map，但是尺寸会发生变化
+    // decoder, 数据宽度都有可能和图片宽度不一致，需要裁剪。
+    // AV_HWDEVICE_TYPE_DXVA2 支持map，但是尺寸会发生变化, 空隙很多
     // AV_HWDEVICE_TYPE_D3D11VA 不支持map
     // AV_HWDEVICE_TYPE_QSV 不支持map
     //    hwtype_ = AV_HWDEVICE_TYPE_DXVA2; //AV_HWDEVICE_TYPE_D3D11VA;
 
-    //    hwtype_ = AV_HWDEVICE_TYPE_NONE;
+    // hwtype_ = AV_HWDEVICE_TYPE_D3D11VA;
 
-    std::vector<AVHWDeviceType> try_hwdevice_types;
+    if (video_player_) {
+        std::vector<AVHWDeviceType> try_hwdevice_types;
 
-    AVCodecID video_codec_id = video_stream_->codecpar->codec_id;
-    if (video_codec_id == AV_CODEC_ID_MJPEG) {
-        // windows mjpeg支持3种解码器mjpeg mjpeg_qsv mjpeg_cuvid。
-        // DXVA2和D3D11VA不支持mjpeg
-        if (hwtype_ == AV_HWDEVICE_TYPE_QSV) {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_QSV,
-                                       AV_HWDEVICE_TYPE_CUDA,
-                                       AV_HWDEVICE_TYPE_NONE});
-        } else if (hwtype_ == AV_HWDEVICE_TYPE_CUDA) {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_CUDA,
-                                       AV_HWDEVICE_TYPE_QSV,
-                                       AV_HWDEVICE_TYPE_NONE});
+        AVCodecID video_codec_id = video_player_->CodecID();
+        if (video_codec_id == AV_CODEC_ID_MJPEG) {
+            // windows mjpeg支持3种解码器mjpeg mjpeg_qsv mjpeg_cuvid。
+            // DXVA2和D3D11VA不支持mjpeg
+            if (hwtype_ == AV_HWDEVICE_TYPE_QSV) {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_QSV,
+                                           AV_HWDEVICE_TYPE_CUDA,
+                                           AV_HWDEVICE_TYPE_NONE});
+            } else if (hwtype_ == AV_HWDEVICE_TYPE_CUDA) {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_CUDA,
+                                           AV_HWDEVICE_TYPE_QSV,
+                                           AV_HWDEVICE_TYPE_NONE});
+            } else {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_NONE});
+            }
         } else {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_NONE});
-        }
-    } else {
-        if (hwtype_ == AV_HWDEVICE_TYPE_QSV) {
-            try_hwdevice_types.assign(
-                {AV_HWDEVICE_TYPE_QSV, AV_HWDEVICE_TYPE_CUDA,
-                 AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2,
-                 AV_HWDEVICE_TYPE_NONE});
-        } else if (hwtype_ == AV_HWDEVICE_TYPE_CUDA) {
-            try_hwdevice_types.assign(
-                {AV_HWDEVICE_TYPE_CUDA, AV_HWDEVICE_TYPE_QSV,
-                 AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2,
-                 AV_HWDEVICE_TYPE_NONE});
-        } else if (hwtype_ == AV_HWDEVICE_TYPE_D3D11VA) {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_D3D11VA,
-                                       AV_HWDEVICE_TYPE_DXVA2,
-                                       AV_HWDEVICE_TYPE_NONE});
-        } else if (hwtype_ == AV_HWDEVICE_TYPE_DXVA2) {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_DXVA2,
-                                       AV_HWDEVICE_TYPE_D3D11VA,
-                                       AV_HWDEVICE_TYPE_NONE});
-        } else {
-            try_hwdevice_types.assign({AV_HWDEVICE_TYPE_NONE});
-        }
-    }
-
-    std::string codec_name =
-        avutil::GetCodecName(video_stream_->codecpar->codec_id);
-
-    for (auto hwtype : try_hwdevice_types) {
-        std::string decoder_name =
-            codec_name + avutil::GetDecoderSuffixByHWDeviceType(hwtype);
-
-        const AVCodec *codec =
-            avcodec_find_decoder_by_name(decoder_name.data());
-        if (!codec) {
-            logger_->warn("can not find decoder by name {}", decoder_name);
-            continue;
+            if (hwtype_ == AV_HWDEVICE_TYPE_QSV) {
+                try_hwdevice_types.assign(
+                    {AV_HWDEVICE_TYPE_QSV, AV_HWDEVICE_TYPE_CUDA,
+                     AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2,
+                     AV_HWDEVICE_TYPE_NONE});
+            } else if (hwtype_ == AV_HWDEVICE_TYPE_CUDA) {
+                try_hwdevice_types.assign(
+                    {AV_HWDEVICE_TYPE_CUDA, AV_HWDEVICE_TYPE_QSV,
+                     AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2,
+                     AV_HWDEVICE_TYPE_NONE});
+            } else if (hwtype_ == AV_HWDEVICE_TYPE_D3D11VA) {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_D3D11VA,
+                                           AV_HWDEVICE_TYPE_DXVA2,
+                                           AV_HWDEVICE_TYPE_NONE});
+            } else if (hwtype_ == AV_HWDEVICE_TYPE_DXVA2) {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_DXVA2,
+                                           AV_HWDEVICE_TYPE_D3D11VA,
+                                           AV_HWDEVICE_TYPE_NONE});
+            } else {
+                try_hwdevice_types.assign({AV_HWDEVICE_TYPE_NONE});
+            }
         }
 
-        logger_->info("try input video codec {}:{}", codec->name,
-                      codec->long_name);
+        std::string codec_name = avutil::GetCodecName(video_codec_id);
+        logger_->debug("codec name {}", codec_name);
 
-        if (hwtype == AV_HWDEVICE_TYPE_NONE ||
-            InitHWDeviceContext(codec, hwtype, false)) {
-            hwtype_ = hwtype;
-            video_codec_ = codec;
+        for (auto hwtype : try_hwdevice_types) {
+            std::string decoder_name =
+                codec_name + avutil::GetDecoderSuffixByHWDeviceType(hwtype);
 
-            logger_->info("select hw device {}, codec {}:{}",
-                          avutil::GetHWDeviceTypeName(hwtype_), codec->name,
+            const AVCodec *codec =
+                avcodec_find_decoder_by_name(decoder_name.data());
+            if (!codec) {
+                logger_->warn("can not find decoder by name {}", decoder_name);
+                continue;
+            }
+
+            logger_->info("try input video codec {}:{}", codec->name,
                           codec->long_name);
-            break;
-        }
-    }
 
-    if (!video_codec_) {
-        logger_->error("can not find decoder for {}", codec_name);
-        return false;
+            if (hwtype == AV_HWDEVICE_TYPE_NONE ||
+                video_player_->InitHWDeviceContext(codec, hwtype)) {
+                video_player_->set_codec(codec); //非硬件加速的时候必须明确设置
+                video_player_->LogHw();
+                break;
+            }
+        }
+
+        if (!video_player_->codec()) {
+            logger_->error("video player codec is not set for {}", codec_name);
+            return false;
+        }
     }
 
     if (audio_stream_) {
@@ -450,87 +461,11 @@ bool FFPlayer::InitInputCodec() {
     return true;
 }
 
-bool FFPlayer::InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype,
-                                   bool get_hw_type) {
-    //    if (get_hw_type) {
-    auto hwconfig = AvUtilGetHwConfig(codec, hwtype);
-    if (!hwconfig) {
-        logger_->error("can not get hwaccel {} config for {}",
-                       avutil::GetHWDeviceTypeName(hwtype_), codec->long_name);
-        return false;
-    }
-
-    int err = av_hwdevice_ctx_create(&hw_device_ctx_, hwconfig->device_type,
-                                     nullptr, nullptr, 0);
-    if (err) {
-        logger_->error("failed to av_hwdevice_ctx_create, {}",
-                       avutil::ErrorString(err));
-        return false;
-    }
-
-    hw_pix_fmt_ = hwconfig->pix_fmt;
-
-    logger_->info("apply hw config [{}, {}] for codec {}",
-                  avutil::GetHWDeviceTypeName(hwconfig->device_type),
-                  avutil::GetPixFmtName(hwconfig->pix_fmt), codec->name);
-
-    logger_->debug("InitHWDeviceContext success");
-
-    return true;
-}
-
 bool FFPlayer::InitDecodeContext() {
-    video_decode_ctx_ = avcodec_alloc_context3(video_codec_);
-    avcodec_parameters_to_context(video_decode_ctx_, video_stream_->codecpar);
 
-    logger_->debug("video input stream time_base {}, {}",
-                   video_stream_->time_base.num, video_stream_->time_base.den);
-    logger_->debug("video input stream avg_frame_rate {}, {}",
-                   video_stream_->avg_frame_rate.num,
-                   video_stream_->avg_frame_rate.den);
-
-    //    input_decode_ctx_->time_base = input_video_stream_->time_base;
-    //    input_decode_ctx_->framerate = input_video_stream_->avg_frame_rate;
-
-    logger_->info("video input decoder time_base {}, {}",
-                  video_decode_ctx_->time_base.num,
-                  video_decode_ctx_->time_base.den);
-    logger_->info("video input decoder framerate {}, {}",
-                  video_decode_ctx_->framerate.num,
-                  video_decode_ctx_->framerate.den);
-
-    if (hw_device_ctx_) {
-        video_decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
-        video_decode_ctx_->opaque = this;
-        video_decode_ctx_->get_format = GetFormat;
-    }
-
-    AVDictionary *codec_opts = nullptr;
-
-    util::AtExit e([&]() {
-        if (codec_opts) {
-            av_dict_free(&codec_opts);
-        }
-    });
-
-    if (video_decode_ctx_->codec_type == AVMEDIA_TYPE_VIDEO ||
-        video_decode_ctx_->codec_type == AVMEDIA_TYPE_AUDIO) {
-        av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
-    }
-
-    //    input_decode_ctx_->thread_count = 8;
-
-    int err = avcodec_open2(video_decode_ctx_, video_codec_, NULL);
-    if (err < 0) {
-        logger_->error("failed to avcodec_open2, {}", avutil::ErrorString(err));
+    if (!video_player_->InitDecodeContext()) {
         return false;
     }
-
-    video_stream_->discard = AVDISCARD_DEFAULT;
-
-    logger_->info("video decoder output fmt {}, resolution {} x {}",
-                  avutil::GetPixFmtName(video_decode_ctx_->pix_fmt),
-                  video_decode_ctx_->width, video_decode_ctx_->height);
 
     if (audio_codec_) {
         audio_decode_ctx_ = avcodec_alloc_context3(audio_codec_);
@@ -544,7 +479,7 @@ bool FFPlayer::InitDecodeContext() {
                        audio_stream_->avg_frame_rate.num,
                        audio_stream_->avg_frame_rate.den);
 
-        err = avcodec_open2(audio_decode_ctx_, audio_codec_, NULL);
+        auto err = avcodec_open2(audio_decode_ctx_, audio_codec_, NULL);
         if (err < 0) {
             logger_->error("failed to avcodec_open2, {}",
                            avutil::ErrorString(err));
@@ -620,30 +555,7 @@ bool FFPlayer::InitSwrContext() {
     return true;
 }
 
-bool FFPlayer::InitSwsContext() {
-    if (hwtype_ == AV_HWDEVICE_TYPE_NONE &&
-        video_decode_ctx_->pix_fmt != sws_fmt_) {
-        // AV_PIX_FMT_YUV420P
-        sws_width_ = video_decode_ctx_->width >> 2 << 2; // align = 4
-        sws_height_ = video_decode_ctx_->height;
-
-        logger_->debug("sws_scale dest {}x{}, pix_fmt {}", sws_width_,
-                       sws_height_, avutil::GetPixFmtName(sws_fmt_));
-
-        sws_ctx_ =
-            sws_getContext(video_decode_ctx_->width, video_decode_ctx_->height,
-                           video_decode_ctx_->pix_fmt, sws_width_, sws_height_,
-                           sws_fmt_, SWS_BICUBIC, NULL, NULL, NULL);
-        if (!sws_ctx_) {
-            logger_->error("sws_getContext fail");
-            return false;
-        }
-
-        return true;
-    }
-
-    return true;
-}
+bool FFPlayer::InitSwsContext() { return video_player_->InitSwsContext(); }
 
 void FFPlayer::ResetInputContext() {
     if (fmt_ctx_) {
@@ -654,34 +566,10 @@ void FFPlayer::ResetInputContext() {
 }
 
 void FFPlayer::ResetDecodeContext() {
-    if (video_decode_ctx_) {
-        if (video_decode_ctx_->hw_device_ctx) {
-            av_buffer_unref(&video_decode_ctx_->hw_device_ctx);
-        }
-
-        avcodec_close(video_decode_ctx_);
-        avcodec_free_context(&video_decode_ctx_);
-        video_decode_ctx_ = nullptr;
-    }
-
     if (audio_decode_ctx_) {
         avcodec_close(audio_decode_ctx_);
         avcodec_free_context(&audio_decode_ctx_);
         audio_decode_ctx_ = nullptr;
-    }
-}
-
-void FFPlayer::ResetHWDeviceContext() {
-    if (hw_device_ctx_) {
-        av_buffer_unref(&hw_device_ctx_);
-        hw_device_ctx_ = nullptr;
-    }
-}
-
-void FFPlayer::ResetSwsContext() {
-    if (sws_ctx_) {
-        sws_freeContext(sws_ctx_);
-        sws_ctx_ = nullptr;
     }
 }
 
@@ -693,196 +581,7 @@ void FFPlayer::ResetSwrContext() {
 }
 
 bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
-    if (!pkt || pkt->size <= 0)
-        return false;
-
-    int ret = avcodec_send_packet(video_decode_ctx_, pkt);
-    if (AVERROR(EAGAIN) == ret) {
-        logger_->error("send packet failure, AVERROR(EAGAIN), input is not "
-                       "accepted in the current state");
-        return false;
-    } else if (AVERROR_EOF == ret) {
-        logger_->error("send packet failure, AVERROR_EOF, the decoder has been "
-                       "flushed, and no new packets can be sent to it (also "
-                       "returned if more than 1 flush packet is sent");
-        return false;
-    } else if (AVERROR(EINVAL) == ret) {
-        logger_->error("send packet failure, AVERROR(EINVAL), codec not "
-                       "opened, it is an encoder, or requires flush");
-        return false;
-    } else if (AVERROR(ENOMEM) == ret) {
-        logger_->error("send packet failure, AVERROR(ENOMEM), failed to add "
-                       "packet to internal queue, or similar other errors: "
-                       "legitimate decoding errors");
-        return false;
-    } else if (ret < 0) {
-        logger_->error("send packet failure, {}", avutil::ErrorString(ret));
-        return false;
-    }
-    logger_->trace("avcodec_send_packet ok");
-
-    while (ret >= 0) {
-        ret = avcodec_receive_frame(video_decode_ctx_, video_frame_);
-
-        if (pkt && ret == AVERROR(EAGAIN)) {
-            break;
-        } else if (ret == AVERROR_EOF) {
-            break;
-        } else if (ret < 0) {
-            logger_->error("avcodec_receive_frame yuv frame failure, {}",
-                           avutil::ErrorString(ret));
-            return false;
-        }
-
-        ts_decode_ = util::TimeMilliseconds();
-        logger_->debug("decode cost {}", ts_decode_ - ts_get_);
-
-        util::AtExit r([&]() { av_frame_unref(video_frame_); });
-
-        logger_->trace(
-            "avcodec_receive_frame ok, fmt {}, resolution {}x{}, pts {}",
-            avutil::GetPixFmtName((AVPixelFormat)video_frame_->format),
-            video_frame_->width, video_frame_->height, video_frame_->pts);
-
-        AVFrame *data_frame = nullptr;
-        if (hw_pix_fmt_ == video_frame_->format) {
-            logger_->debug(
-                "hw frame {}, color_primaries {}, w {}, h {}, "
-                "yw {}, uw {}, vw {}",
-                avutil::GetPixFmtName((AVPixelFormat)video_frame_->format),
-                video_frame_->color_primaries, video_frame_->width,
-                video_frame_->height, video_frame_->linesize[0],
-                video_frame_->linesize[1], video_frame_->linesize[2]);
-
-            // 如果采用的硬件加速剂，则调用avcodec_receive_frame()函数后，解码后的数据还在GPU中，所以需要通过此函数
-            // 将GPU中的数据转移到CPU中来
-            data_frame = av_frame_alloc();
-
-            if (map_hw_frame_) {
-                int ret = av_hwframe_map(data_frame, video_frame_,
-                                         AV_HWFRAME_MAP_READ); // 映射硬件数据帧
-                if (ret < 0) {
-                    logger_->error(
-                        "av_hwframe_map fail, {}, disable hw frame mapping",
-                        avutil::ErrorString(ret));
-                    map_hw_frame_ = false;
-                    return false;
-                }
-
-                ts_hw_ = util::TimeMilliseconds();
-                logger_->debug("map cost {}", ts_hw_ - ts_decode_);
-
-                // map之后的宽高是没设置的
-                data_frame->width = video_frame_->width;
-                data_frame->height = video_frame_->height;
-
-                logger_->debug(
-                    "mapped frame {}, color_primaries {}, w {}, h {}, "
-                    "yw {}, uw {}, vw {}",
-                    av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
-                    data_frame->color_primaries, data_frame->width,
-                    data_frame->height, data_frame->linesize[0],
-                    data_frame->linesize[1], data_frame->linesize[2]);
-            } else {
-                if ((ret = av_hwframe_transfer_data(data_frame, video_frame_,
-                                                    0)) < 0) {
-                    logger_->error("av_hwframe_transfer_data fail, {}",
-                                   avutil::ErrorString(ret));
-                    return false;
-                }
-
-                // pts需要设置
-                data_frame->pts = video_frame_->pts;
-
-                ts_hw_ = util::TimeMilliseconds();
-
-                logger_->debug("transfer cost {}", ts_hw_ - ts_decode_);
-
-                logger_->debug(
-                    "transfer frame {}, color_primaries {}, w {}, h {}, "
-                    "yw {}, uw {}, vw {}, pts {}",
-                    av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
-                    data_frame->color_primaries, data_frame->width,
-                    data_frame->height, data_frame->linesize[0],
-                    data_frame->linesize[1], data_frame->linesize[2],
-                    data_frame->pts);
-            }
-
-        } else {
-
-            if (sws_ctx_) {
-                data_frame = av_frame_alloc();
-                data_frame->format = sws_fmt_;
-                data_frame->width = sws_width_;
-                data_frame->height = sws_height_;
-                int err = av_frame_get_buffer(data_frame, 0);
-                if (err < 0) {
-                    logger_->error("av_frame_get_buffer fail, {}",
-                                   avutil::ErrorString((err)));
-                    return false;
-                }
-
-                // if (av_frame_make_writable(scale_frame) < 0) {
-                //     FATAL("scale frame is not writable");
-                // }
-
-                int h =
-                    sws_scale(sws_ctx_, video_frame_->data,
-                              video_frame_->linesize, 0, video_frame_->height,
-                              data_frame->data, data_frame->linesize);
-                if (h <= 0 || h != data_frame->height) {
-                    logger_->error("sws_scale height error {}", h);
-                    return false;
-                }
-
-                ts_sws_ = util::TimeMilliseconds();
-                logger_->trace("sws_scale cost {}", ts_sws_ - ts_decode_);
-
-                logger_->trace(
-                    "sws_scale ok, fmt {}, resolution {}x{}",
-                    avutil::GetPixFmtName((AVPixelFormat)data_frame->format),
-                    data_frame->width, data_frame->height);
-
-            } else {
-                data_frame = video_frame_;
-            }
-        }
-
-        if (frame_cb_) {
-            ts_cb_ = util::TimeMilliseconds();
-            logger_->debug("handle frame cost {}", ts_cb_ - ts_get_);
-
-            auto video_clock =
-                data_frame->pts * av_q2d(video_stream_->time_base);
-            auto audio_clock = audio_clock_cb_();
-
-            auto diff = video_clock - audio_clock;
-            if (diff > 0.04) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds((long long)(diff * 1000)));
-
-                audio_clock = audio_clock_cb_();
-
-                logger_->info(
-                    "video frame pts {}, clock {}, audio clock {}, diff {}",
-                    data_frame->pts, video_clock, audio_clock,
-                    video_clock - audio_clock);
-            } else {
-                logger_->info(
-                    "video frame pts {}, clock {}, audio clock {}, diff {}",
-                    data_frame->pts, video_clock, audio_clock,
-                    video_clock - audio_clock);
-            }
-
-            frame_cb_(data_frame);
-        }
-
-        if (data_frame != video_frame_) {
-            av_frame_free(&data_frame);
-        }
-    }
-
-    return true;
+    return video_player_->HandleFrame(pkt);
 }
 
 bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
@@ -1056,21 +755,6 @@ bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
     return true;
 }
 
-AVPixelFormat FFPlayer::GetFormat(AVCodecContext *ctx,
-                                  const AVPixelFormat *pix_fmts) {
-    FFPlayer *inst = static_cast<FFPlayer *>(ctx->opaque);
-    const enum AVPixelFormat *p;
-
-    for (p = pix_fmts; *p != -1; p++) {
-        if (*p == inst->hw_pix_fmt_) {
-            return *p;
-        }
-    }
-
-    inst->logger_->error("Failed to get HW surface format");
-    return AV_PIX_FMT_NONE;
-}
-
 int FFPlayer::InterruptCallback(void *context) {
     FFPlayer *obj = (FFPlayer *)context;
     obj->interrupt_.func_end_timestamp = util::TimeMilliseconds();
@@ -1115,30 +799,8 @@ void FFPlayer::ThreadFunc() {
                                pkt->stream_index, pkt->size, pkt->time_base.num,
                                pkt->time_base.den, pkt->pts, pkt->duration);
 
-                if (pkt->stream_index == video_index_) {
-                    ts_get_ = util::TimeMilliseconds();
-
-                    auto pts_dur = pkt->pts - video_pts;
-                    logger_->trace("video frame, pts {}, pts duration {}",
-                                   pkt->pts, pts_dur);
-                    video_pts = pkt->pts;
-
-                    // std::fstream
-                    // fs(std::to_string(ts_get_)+".jpg",std::ios_base::out|std::ios_base::binary);
-                    // fs.write((const char*)pkt->data,pkt->size);
-                    // fs.close();
-
-                    // int width, height, nrChannels;
-                    // unsigned char *data = stbi_load_from_memory(
-                    //     pkt->data, pkt->size, &width, &height, &nrChannels,
-                    //     0);
-
-                    // auto ts_decode = util::TimeMilliseconds();
-                    // logger_->debug(
-                    //     "decode mjpeg cost {}, width {}, height {}, nrch {}",
-                    //     ts_decode - ts_get_, width, height, nrChannels);
-                    // stbi_image_free(data);
-
+                if (video_player_ &&
+                    video_player_->index() == pkt->stream_index) {
                     this->HandleVideoFrame(pkt);
                 } else if (pkt->stream_index == audio_index_) {
                     auto pts_dur = pkt->pts - audio_pts;
@@ -1171,3 +833,389 @@ void FFPlayer::ThreadFunc() {
 
     logger_->info("run end");
 }
+
+AVPlayer::AVPlayer(int idx, AVStream *strm) : index_(idx), stream_(strm) {
+    if (!stream_)
+        throw std::runtime_error("AVStream is null");
+}
+
+AVPlayer::~AVPlayer() { ResetDecodeContext(); }
+
+void AVPlayer::ResetDecodeContext() {
+    if (decode_ctx_) {
+        if (decode_ctx_->hw_device_ctx) {
+            av_buffer_unref(&decode_ctx_->hw_device_ctx);
+        }
+
+        avcodec_close(decode_ctx_);
+        avcodec_free_context(&decode_ctx_);
+        decode_ctx_ = nullptr;
+    }
+}
+
+AVCodecID AVPlayer::CodecID() const { return stream_->codecpar->codec_id; }
+
+AVCodecParameters *AVPlayer::CodecPar() const { return stream_->codecpar; }
+
+AVRational AVPlayer::TimeBase() { return stream_->time_base; }
+
+void AVPlayer::set_codec(const AVCodec *c) { codec_ = c; }
+
+VideoPlayer::VideoPlayer(int index, AVStream *stream)
+    : AVPlayer(index, stream) {
+    logger_ = util::log::GetLogger(__func__);
+    decoded_frame_ = av_frame_alloc();
+}
+
+VideoPlayer::~VideoPlayer() {
+    ResetSwsContext();
+    ResetHWDeviceContext();
+}
+
+int VideoPlayer::Fps() { return (int)av_q2d(stream_->avg_frame_rate); }
+
+bool VideoPlayer::InitHWDeviceContext(const AVCodec *codec,
+                                      AVHWDeviceType hwtype) {
+    auto hwconfig = AvUtilGetHwConfig(codec, hwtype);
+    if (!hwconfig) {
+        logger_->error("can not get hwaccel {} config for {}",
+                       avutil::GetHWDeviceTypeName(hwtype), codec->long_name);
+        return false;
+    }
+
+    // 如果以前创建过，则先释放
+    if (hw_device_ctx_) {
+        av_buffer_unref(&hw_device_ctx_);
+        hw_device_ctx_ = nullptr;
+    }
+
+    int err = av_hwdevice_ctx_create(&hw_device_ctx_, hwconfig->device_type,
+                                     nullptr, nullptr, 0);
+    if (err) {
+        logger_->error("failed to av_hwdevice_ctx_create, {}",
+                       avutil::ErrorString(err));
+        return false;
+    }
+
+    // codec_ = codec; 公共函数设置
+    hw_pix_fmt_ = hwconfig->pix_fmt;
+    hwtype_ = hwtype;
+
+    logger_->info("apply hw config [{}, {}] for codec {}",
+                  avutil::GetHWDeviceTypeName(hwconfig->device_type),
+                  avutil::GetPixFmtName(hwconfig->pix_fmt), codec->name);
+
+    logger_->debug("InitHWDeviceContext success");
+
+    return true;
+}
+
+AVPixelFormat VideoPlayer::GetHwFormat(AVCodecContext *ctx,
+                                       const AVPixelFormat *pix_fmts) {
+    VideoPlayer *inst = static_cast<VideoPlayer *>(ctx->opaque);
+    const enum AVPixelFormat *p;
+
+    for (p = pix_fmts; *p != -1; p++) {
+        if (*p == inst->hw_pix_fmt_) {
+            return *p;
+        }
+    }
+
+    inst->logger_->error("Failed to get HW surface format");
+    return AV_PIX_FMT_NONE;
+}
+
+void VideoPlayer::LogInput() {
+    auto video_codecpar = stream_->codecpar;
+    logger_->info("input streams video index = {}, codec id {}, pix fmt {}, "
+                  "avg fps is {}, resolution {}x{}, time_base {}/{}",
+                  index_, avutil::GetCodecName(video_codecpar->codec_id),
+                  avutil::GetPixFmtName((AVPixelFormat)video_codecpar->format),
+                  (int)av_q2d(stream_->avg_frame_rate), video_codecpar->width,
+                  video_codecpar->height, stream_->time_base.num,
+                  stream_->time_base.den);
+}
+
+void VideoPlayer::LogHw() {
+    if (!codec_) {
+        logger_->error("LogHw fail, codec is null");
+    } else {
+        logger_->info("select hw device {}, codec {}:{}",
+                      avutil::GetHWDeviceTypeName(hwtype_), codec_->name,
+                      codec_->long_name);
+    }
+}
+
+bool VideoPlayer::InitDecodeContext() {
+    if (!codec_) {
+        logger_->error("InitDecodeContext fail, AVCodec is null");
+        return false;
+    }
+
+    decode_ctx_ = avcodec_alloc_context3(codec_);
+    avcodec_parameters_to_context(decode_ctx_, stream_->codecpar);
+
+    logger_->debug("video input stream time_base {}, {}",
+                   stream_->time_base.num, stream_->time_base.den);
+    logger_->debug("video input stream avg_frame_rate {}, {}",
+                   stream_->avg_frame_rate.num, stream_->avg_frame_rate.den);
+
+    // decoder time_base is not equal to stream
+    logger_->info("video input decoder time_base {}, {}",
+                  decode_ctx_->time_base.num, decode_ctx_->time_base.den);
+    logger_->info("video input decoder framerate {}, {}",
+                  decode_ctx_->framerate.num, decode_ctx_->framerate.den);
+
+    if (hw_device_ctx_) {
+        decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
+        decode_ctx_->opaque = this;
+        decode_ctx_->get_format = GetHwFormat;
+    }
+
+    AVDictionary *codec_opts = nullptr;
+
+    util::AtExit e([&]() {
+        if (codec_opts) {
+            av_dict_free(&codec_opts);
+        }
+    });
+
+    av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
+    //    decode_ctx_->thread_count = 8;
+
+    int err = avcodec_open2(decode_ctx_, codec_, NULL);
+    if (err < 0) {
+        logger_->error("failed to avcodec_open2, {}", avutil::ErrorString(err));
+        return false;
+    }
+
+    stream_->discard = AVDISCARD_DEFAULT;
+    logger_->info("video decode output fmt {}, resolution {}x{}",
+                  avutil::GetPixFmtName(decode_ctx_->pix_fmt),
+                  decode_ctx_->width, decode_ctx_->height);
+
+    return true;
+}
+
+bool VideoPlayer::InitSwsContext() {
+    if (hwtype_ == AV_HWDEVICE_TYPE_NONE && decode_ctx_->pix_fmt != sws_fmt_) {
+        // AV_PIX_FMT_YUV420P
+        sws_width_ = decode_ctx_->width >> 2 << 2; // align = 4
+        sws_height_ = decode_ctx_->height;
+
+        logger_->debug("sws_scale dest {}x{}, pix_fmt {}", sws_width_,
+                       sws_height_, avutil::GetPixFmtName(sws_fmt_));
+
+        sws_ctx_ = sws_getContext(decode_ctx_->width, decode_ctx_->height,
+                                  decode_ctx_->pix_fmt, sws_width_, sws_height_,
+                                  sws_fmt_, SWS_BICUBIC, NULL, NULL, NULL);
+        if (!sws_ctx_) {
+            logger_->error("sws_getContext fail");
+            return false;
+        }
+
+        return true;
+    }
+
+    return true;
+}
+
+void VideoPlayer::ResetHWDeviceContext() {
+    if (hw_device_ctx_) {
+        av_buffer_unref(&hw_device_ctx_);
+        hw_device_ctx_ = nullptr;
+    }
+}
+
+void VideoPlayer::ResetSwsContext() {
+    if (sws_ctx_) {
+        sws_freeContext(sws_ctx_);
+        sws_ctx_ = nullptr;
+    }
+}
+
+bool VideoPlayer::HandleFrame(AVPacket *pkt) {
+    if (!pkt || pkt->size <= 0)
+        return false;
+
+    ts_start_ = util::TimeMilliseconds();
+
+    int ret = avcodec_send_packet(decode_ctx_, pkt);
+    if (AVERROR(EAGAIN) == ret) {
+        logger_->error("send packet failure, AVERROR(EAGAIN), input is not "
+                       "accepted in the current state");
+        return false;
+    } else if (AVERROR_EOF == ret) {
+        logger_->error("send packet failure, AVERROR_EOF, the decoder has been "
+                       "flushed, and no new packets can be sent to it (also "
+                       "returned if more than 1 flush packet is sent");
+        return false;
+    } else if (AVERROR(EINVAL) == ret) {
+        logger_->error("send packet failure, AVERROR(EINVAL), codec not "
+                       "opened, it is an encoder, or requires flush");
+        return false;
+    } else if (AVERROR(ENOMEM) == ret) {
+        logger_->error("send packet failure, AVERROR(ENOMEM), failed to add "
+                       "packet to internal queue, or similar other errors: "
+                       "legitimate decoding errors");
+        return false;
+    } else if (ret < 0) {
+        logger_->error("send packet failure, {}", avutil::ErrorString(ret));
+        return false;
+    }
+    logger_->trace("avcodec_send_packet ok");
+
+    while (ret >= 0) {
+        ret = avcodec_receive_frame(decode_ctx_, decoded_frame_);
+
+        if (pkt && ret == AVERROR(EAGAIN)) {
+            break;
+        } else if (ret == AVERROR_EOF) {
+            break;
+        } else if (ret < 0) {
+            logger_->error("avcodec_receive_frame frame failure, {}",
+                           avutil::ErrorString(ret));
+            return false;
+        }
+
+        ts_decode_ = util::TimeMilliseconds();
+        logger_->trace(
+            "avcodec_receive_frame ok, fmt {}, resolution {}x{}, pts {}, cost "
+            "{}, linesize {}",
+            avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
+            decoded_frame_->width, decoded_frame_->height, decoded_frame_->pts,
+            ts_decode_ - ts_start_, decoded_frame_->linesize[0]);
+
+        util::AtExit r([&]() { av_frame_unref(decoded_frame_); });
+
+        AVFrame *data_frame = nullptr;
+        if (hw_pix_fmt_ == decoded_frame_->format) {
+            logger_->debug(
+                "hw frame {}, color_primaries {}, w {}, h {}, "
+                "yw {}, uw {}, vw {}",
+                avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
+                avutil::GetColorPrimariesName(decoded_frame_->color_primaries),
+                decoded_frame_->width, decoded_frame_->height,
+                decoded_frame_->linesize[0], decoded_frame_->linesize[1],
+                decoded_frame_->linesize[2]);
+
+            // 如果采用的硬件加速剂，则调用avcodec_receive_frame()函数后，解码后的数据还在GPU中，所以需要通过此函数
+            // 将GPU中的数据转移到CPU中来
+            data_frame = av_frame_alloc();
+
+            if (map_hw_frame_) {
+                int ret = av_hwframe_map(data_frame, decoded_frame_,
+                                         AV_HWFRAME_MAP_READ); // 映射硬件数据帧
+                if (ret < 0) {
+                    logger_->error(
+                        "av_hwframe_map fail, {}, disable hw frame mapping",
+                        avutil::ErrorString(ret));
+                    map_hw_frame_ = false;
+                    return false;
+                }
+
+                ts_hw_ = util::TimeMilliseconds();
+                logger_->debug("map cost {}", ts_hw_ - ts_decode_);
+
+                // map之后的宽高是没设置的
+                data_frame->width = decoded_frame_->width;
+                data_frame->height = decoded_frame_->height;
+
+                logger_->debug(
+                    "mapped frame {}, color_primaries {}, w {}, h {}, "
+                    "yw {}, uw {}, vw {}",
+                    av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
+                    data_frame->color_primaries, data_frame->width,
+                    data_frame->height, data_frame->linesize[0],
+                    data_frame->linesize[1], data_frame->linesize[2]);
+            } else {
+                if ((ret = av_hwframe_transfer_data(data_frame, decoded_frame_,
+                                                    0)) < 0) {
+                    logger_->error("av_hwframe_transfer_data fail, {}",
+                                   avutil::ErrorString(ret));
+                    return false;
+                }
+
+                ts_hw_ = util::TimeMilliseconds();
+                logger_->debug("transfer cost {}", ts_hw_ - ts_decode_);
+
+                // pts需要设置
+                data_frame->pts = decoded_frame_->pts;
+
+                logger_->debug(
+                    "transfer frame {}, color_primaries {}, w {}, h {}, "
+                    "yw {}, uw {}, vw {}, pts {}",
+                    av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
+                    avutil::GetColorPrimariesName(data_frame->color_primaries),
+                    data_frame->width, data_frame->height,
+                    data_frame->linesize[0], data_frame->linesize[1],
+                    data_frame->linesize[2], data_frame->pts);
+            }
+
+        } else {
+            if (sws_ctx_) {
+                data_frame = av_frame_alloc();
+                if (!data_frame) {
+                    logger_->error("av_frame_alloc fail, OOM");
+                    return false;
+                }
+                data_frame->format = sws_fmt_;
+                data_frame->width = sws_width_;
+                data_frame->height = sws_height_;
+                int err = av_frame_get_buffer(data_frame, 0);
+                if (err < 0) {
+                    logger_->error("av_frame_get_buffer fail, {}",
+                                   avutil::ErrorString((err)));
+                    av_frame_free(&data_frame);
+                    return false;
+                }
+
+                // if (av_frame_make_writable(scale_frame) < 0) {
+                //     FATAL("scale frame is not writable");
+                // }
+
+                int h = sws_scale(sws_ctx_, decoded_frame_->data,
+                                  decoded_frame_->linesize, 0,
+                                  decoded_frame_->height, data_frame->data,
+                                  data_frame->linesize);
+                if (h <= 0 || h != data_frame->height) {
+                    logger_->error("sws_scale height error {}", h);
+                    return false;
+                }
+
+                ts_sws_ = util::TimeMilliseconds();
+                logger_->trace("sws_scale cost {}", ts_sws_ - ts_decode_);
+
+                logger_->trace(
+                    "sws_scale ok, fmt {}, resolution {}x{}",
+                    avutil::GetPixFmtName((AVPixelFormat)data_frame->format),
+                    data_frame->width, data_frame->height);
+
+            } else {
+                data_frame = decoded_frame_;
+            }
+        }
+
+        if (frame_cb_) {
+            ts_cb_ = util::TimeMilliseconds();
+            logger_->debug("handle frame cost {}", ts_cb_ - ts_start_);
+
+            auto video_clock = data_frame->pts * av_q2d(stream_->time_base);
+
+            frame_cb_(data_frame, video_clock);
+        }
+
+        if (data_frame != decoded_frame_) {
+            av_frame_free(&data_frame);
+        }
+    }
+
+    return true;
+}
+
+AudioPlayer::AudioPlayer(int index, AVStream *stream)
+    : AVPlayer(index, stream) {
+    logger_ = util::log::GetLogger(__func__);
+}
+
+AudioPlayer::~AudioPlayer() {}

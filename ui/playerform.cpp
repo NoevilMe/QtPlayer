@@ -28,8 +28,12 @@ PlayerForm::~PlayerForm() {
         player_.reset();
     }
 
+    qDebug() << "stop speaker ...";
+
     if (speaker_) {
-        speaker_->requestInterruption();
+        speaker_->Stop();
+        // speaker_->quit();
+        // speaker_->requestInterruption();
         speaker_->wait();
         speaker_.reset();
     }

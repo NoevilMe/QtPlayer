@@ -47,6 +47,14 @@ std::string GetHWDeviceTypeName(enum AVHWDeviceType type) {
 
 std::string GetCodecName(AVCodecID id) { return avcodec_get_name(id); }
 
+std::string GetColorPrimariesName(AVColorPrimaries primaries) {
+    auto name = av_color_primaries_name(primaries);
+    if (name)
+        return name;
+    else
+        return "none";
+}
+
 void GetAllDevices() {
     // windows系统的输入格式为dshow
     const AVInputFormat *iFormat = av_find_input_format("dshow");

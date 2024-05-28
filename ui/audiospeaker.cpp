@@ -13,7 +13,10 @@ AudioSpeaker::~AudioSpeaker() {
     }
 }
 
-void AudioSpeaker::Stop() { requestInterruption(); }
+void AudioSpeaker::Stop() {
+    requestInterruption();
+    cond_.notify_one();
+}
 
 QAudioDevice AudioSpeaker::DefaultDevice() {
     return QMediaDevices::defaultAudioOutput();
@@ -97,16 +100,16 @@ void AudioSpeaker::run() {
         mutex_.unlock();
 
         while (audio_sink_->bytesFree() < frame_data.length) {
-            qDebug() << "audio sink bytes free: " << audio_sink_->bytesFree()
-                     << ", wait ";
+            // qDebug() << "audio sink bytes free: " << audio_sink_->bytesFree()
+            //          << ", wait ";
             sleep(std::chrono::milliseconds(5));
         }
 
-        qDebug() << "audio sink bytes free: " << audio_sink_->bytesFree();
+        // qDebug() << "audio sink bytes free: " << audio_sink_->bytesFree();
         auto wlen = audio_device_->write(frame_data.buf, frame_data.length);
         queued_clock_.store(frame_data.clock);
-        qDebug() << "audio sink write " << wlen
-                 << ", bytes free: " << audio_sink_->bytesFree();
+        // qDebug() << "audio sink write " << wlen
+        //          << ", bytes free: " << audio_sink_->bytesFree();
 
         delete[] frame_data.buf;
     }

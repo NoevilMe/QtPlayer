@@ -31,6 +31,9 @@ struct AvFunctionInterrupt {
     bool interrupted = false;
 };
 
+class VideoPlayer;
+class AudioPlayer;
+
 class FFPlayer {
 public:
     FFPlayer();
@@ -55,13 +58,14 @@ public:
         audio_clock_cb_ = cb;
     }
 
+    void PlayVideoFrame(AVFrame *frame, double clock);
+
 protected:
     bool ResampleFormatValid() const;
 
     bool InitInputContext();
     bool InitInputCodec();
-    bool InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype,
-                             bool get_hw_type = false);
+
     bool InitDecodeContext();
     bool InitSwrContext();
     bool InitSwsContext();
@@ -75,8 +79,6 @@ protected:
     bool HandleVideoFrame(AVPacket *pkt);
     bool HandleAudioFrame(AVPacket *pkt);
 
-    static enum AVPixelFormat GetFormat(AVCodecContext *ctx,
-                                        const enum AVPixelFormat *pix_fmts);
     static int InterruptCallback(void *context);
 
     void ThreadFunc();
@@ -89,26 +91,12 @@ protected:
 
     // 视频硬件加速设备
     AVHWDeviceType hwtype_;
-    AVBufferRef *hw_device_ctx_ = nullptr;
-    AVPixelFormat hw_pix_fmt_ = AVPixelFormat::AV_PIX_FMT_NONE;
-    bool map_hw_frame_ = true;
 
     // 输入
     AVFormatContext *fmt_ctx_ = nullptr;
     // video
-    int video_index_ = -1;
-    AVStream *video_stream_ = nullptr;
 
-    const AVCodec *video_codec_ = nullptr;
-    AVCodecContext *video_decode_ctx_ = nullptr;
-    int64_t video_decode_dts_ = 0;
-    AVFrame *video_frame_ = nullptr;
-    long long video_pts = 0;
-
-    AVPixelFormat sws_fmt_ = AV_PIX_FMT_YUV420P;
-    int sws_width_ = 0;
-    int sws_height_ = 0;
-    SwsContext *sws_ctx_ = nullptr;
+    std::unique_ptr<VideoPlayer> video_player_;
 
     // audio
     int audio_index_ = -1;
@@ -133,6 +121,105 @@ protected:
     std::function<void(char *, int, double)> audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
     std::shared_ptr<spdlog::logger> logger_;
+};
+
+class AVPlayer {
+public:
+    AVPlayer(int index, AVStream *);
+    virtual ~AVPlayer();
+
+    int index() const { return index_; }
+    AVCodecID CodecID() const;
+    AVCodecParameters *CodecPar() const;
+    // 时间基，只能从流中读取。解码器的时间基无效。
+    AVRational TimeBase();
+
+    void set_codec(const AVCodec *c);
+    const AVCodec *codec() const { return codec_; }
+
+    void ResetDecodeContext();
+
+    virtual void LogInput() = 0;
+    virtual void LogHw() {}
+    virtual bool InitDecodeContext() = 0;
+    virtual bool HandleFrame(AVPacket *pkt) = 0;
+
+protected:
+    int index_;
+    AVStream *stream_;
+    const AVCodec *codec_ = nullptr;
+    AVCodecContext *decode_ctx_ = nullptr;
+
+    std::shared_ptr<spdlog::logger> logger_;
+};
+
+class VideoPlayer : public AVPlayer {
+public:
+    VideoPlayer(int index, AVStream *stream);
+    ~VideoPlayer();
+
+    int Fps();
+
+    bool InitHWDeviceContext(const AVCodec *codec, AVHWDeviceType hwtype);
+    bool InitSwsContext();
+
+    void ResetHWDeviceContext();
+    void ResetSwsContext();
+
+    void SetFrameCallback(const std::function<void(AVFrame *, double)> &cb) {
+        frame_cb_ = cb;
+    }
+
+private:
+    static enum AVPixelFormat GetHwFormat(AVCodecContext *ctx,
+                                          const enum AVPixelFormat *pix_fmts);
+
+    // AVPlayer interface
+public:
+    void LogInput() override;
+    void LogHw() override;
+    bool InitDecodeContext() override;
+    bool HandleFrame(AVPacket *pkt) override;
+
+private:
+    // 视频硬件加速设备
+    AVHWDeviceType hwtype_ = AV_HWDEVICE_TYPE_NONE;
+    AVBufferRef *hw_device_ctx_ = nullptr;
+    AVPixelFormat hw_pix_fmt_ = AVPixelFormat::AV_PIX_FMT_NONE;
+
+    // 图像转换
+    AVPixelFormat sws_fmt_ = AV_PIX_FMT_YUV420P;
+    int sws_width_ = 0;
+    int sws_height_ = 0;
+    SwsContext *sws_ctx_ = nullptr;
+
+    // 映射还是下载
+    bool map_hw_frame_ = true;
+
+    int64_t video_decode_dts_ = 0;
+    long long video_pts = 0;
+
+    AVFrame *decoded_frame_ = nullptr;
+
+    long long ts_start_ = 0;
+    long long ts_decode_ = 0;
+    long long ts_hw_ = 0;  // transfer or map
+    long long ts_sws_ = 0; // sws_scale
+    long long ts_cb_ = 0;
+
+    std::function<void(AVFrame *, double)> frame_cb_;
+};
+
+class AudioPlayer : public AVPlayer {
+public:
+    AudioPlayer(int index, AVStream *stream);
+    ~AudioPlayer();
+
+    int64_t audio_decode_dts_ = 0;
+    AVFrame *audio_frame_ = nullptr;
+    long long audio_pts = 0;
+
+    SwrContext *swr_ctx_ = nullptr;
 };
 
 #endif // FFPLAYER_H
