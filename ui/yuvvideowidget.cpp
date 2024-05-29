@@ -124,8 +124,8 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
     resetVideoSize(frame->linesize[0], frame->height);
     // resetVideoSize(frame->width, frame->height);
 
-    qDebug() << "width " << frame->width << ", height " << frame->height
-             << ", line size " << frame->linesize[0];
+    // qDebug() << "width " << frame->width << ", height " << frame->height
+    //          << ", line size " << frame->linesize[0];
 
     pixFormat_ = frame->format;
     if (AV_PIX_FMT_YUV420P == pixFormat_ || AV_PIX_FMT_YUVJ420P == pixFormat_) {

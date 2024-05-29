@@ -46,7 +46,7 @@ public:
     void SetAudioDeviceFormat(AudioDeviceFormat fmt);
 
     void SetFrameCallback(const std::function<void(AVFrame *)> &cb) {
-        frame_cb_ = cb;
+        video_frame_cb_ = cb;
     }
 
     void
@@ -59,6 +59,7 @@ public:
     }
 
     void PlayVideoFrame(AVFrame *frame, double clock);
+    void PlayAudioFrame(char *data, int length, double clock);
 
 protected:
     bool ResampleFormatValid() const;
@@ -97,12 +98,9 @@ protected:
     // video
 
     std::unique_ptr<VideoPlayer> video_player_;
+    std::unique_ptr<AudioPlayer> audio_player_;
 
     // audio
-    int audio_index_ = -1;
-    AVStream *audio_stream_ = nullptr;
-    const AVCodec *audio_codec_ = nullptr;
-    AVCodecContext *audio_decode_ctx_ = nullptr;
     int64_t audio_decode_dts_ = 0;
     AVFrame *audio_frame_ = nullptr;
     long long audio_pts = 0;
@@ -117,7 +115,7 @@ protected:
 
     std::atomic_bool running_;
     std::thread thd_;
-    std::function<void(AVFrame *)> frame_cb_;
+    std::function<void(AVFrame *)> video_frame_cb_;
     std::function<void(char *, int, double)> audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
     std::shared_ptr<spdlog::logger> logger_;
@@ -131,7 +129,7 @@ public:
     int index() const { return index_; }
     AVCodecID CodecID() const;
     AVCodecParameters *CodecPar() const;
-    // 时间基，只能从流中读取。解码器的时间基无效。
+    // 时间基，只能从流中读取。解码器的时间不能用于计算clock。
     AVRational TimeBase();
 
     void set_codec(const AVCodec *c);
@@ -149,6 +147,8 @@ protected:
     AVStream *stream_;
     const AVCodec *codec_ = nullptr;
     AVCodecContext *decode_ctx_ = nullptr;
+
+    AVFrame *decoded_frame_ = nullptr;
 
     std::shared_ptr<spdlog::logger> logger_;
 };
@@ -196,11 +196,6 @@ private:
     // 映射还是下载
     bool map_hw_frame_ = true;
 
-    int64_t video_decode_dts_ = 0;
-    long long video_pts = 0;
-
-    AVFrame *decoded_frame_ = nullptr;
-
     long long ts_start_ = 0;
     long long ts_decode_ = 0;
     long long ts_hw_ = 0;  // transfer or map
@@ -215,11 +210,28 @@ public:
     AudioPlayer(int index, AVStream *stream);
     ~AudioPlayer();
 
-    int64_t audio_decode_dts_ = 0;
-    AVFrame *audio_frame_ = nullptr;
-    long long audio_pts = 0;
+    void set_resample_format(ResampleFormat fmt);
 
+    // AVPlayer interface
+    void LogInput() override;
+    bool InitDecodeContext() override;
+    bool HandleFrame(AVPacket *pkt) override;
+
+    bool InitSwrContext();
+    void ResetSwrContext();
+
+    void SetFrameCallback(const std::function<void(char *, int, double)> &cb) {
+        frame_cb_ = cb;
+    }
+
+private:
+    bool ResampleFormatValid() const;
+
+private:
+    ResampleFormat resample_fmt_;
     SwrContext *swr_ctx_ = nullptr;
+
+    std::function<void(char *, int, double)> frame_cb_;
 };
 
 #endif // FFPLAYER_H

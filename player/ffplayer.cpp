@@ -194,7 +194,15 @@ void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
                       frame->pts, clock, audio_clock, clock - audio_clock);
     }
 
-    frame_cb_(frame);
+    video_frame_cb_(frame);
+}
+
+void FFPlayer::PlayAudioFrame(char *data, int length, double clock) {
+    if (audio_frame_cb_) {
+        audio_frame_cb_(data, length, clock);
+        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data, length,
+                       clock);
+    }
 }
 
 bool FFPlayer::ResampleFormatValid() const {
@@ -326,9 +334,12 @@ bool FFPlayer::InitInputContext() {
                           std::placeholders::_1, std::placeholders::_2));
 
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
-                   audio_index_ < 0) {
-            audio_index_ = i;
-            audio_stream_ = stream;
+                   !audio_player_) {
+            audio_player_.reset(new AudioPlayer(i, stream));
+            audio_player_->SetFrameCallback(std::bind(
+                &FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
+                std::placeholders::_2, std::placeholders::_3));
+            audio_player_->set_resample_format(resample_fmt_);
         }
     }
 
@@ -337,28 +348,13 @@ bool FFPlayer::InitInputContext() {
         return false;
     }
 
-    video_player_->LogInput();
-
     // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
-    //  TODO:
     std::string name(fmt::format("@ {}", url));
     av_dump_format(fmt_ctx_, 0, name.data(), 0);
 
-    if (audio_stream_) {
-        auto audio_codecpar = audio_stream_->codecpar;
-        logger_->info(
-            "input streams audio index = {}, codec id {}, sample rate {}, "
-            "channels {}, sample fmt {}, bits per sample {}, time_base {}/{}",
-            audio_index_, avutil::GetCodecName(audio_codecpar->codec_id),
-            audio_codecpar->sample_rate, audio_codecpar->ch_layout.nb_channels,
-            avutil::GetSampleFmtName((AVSampleFormat)audio_codecpar->format),
-            audio_codecpar->bits_per_coded_sample, audio_stream_->time_base.num,
-            audio_stream_->time_base.den);
-
-        // 输出调试信息：tbr代表帧率；tbn代表文件层（st）的时间精度，即1S=1200k，和duration相关；tbc代表视频层（st->codec）的时间精度，即1S=XX，和stream->duration和时间戳相关。
-        //  TODO:
-        //        std::string name(fmt::format("@ {}", url));
-        //        av_dump_format(in_fmt_ctx_, audio_index, name.data(), 0);
+    video_player_->LogInput();
+    if (audio_player_) {
+        audio_player_->LogInput();
     }
 
     return true;
@@ -446,15 +442,17 @@ bool FFPlayer::InitInputCodec() {
         }
     }
 
-    if (audio_stream_) {
-        audio_codec_ = avcodec_find_decoder(audio_stream_->codecpar->codec_id);
-        if (audio_codec_) {
-            logger_->info("input audio codec {}:{}", audio_codec_->name,
-                          audio_codec_->long_name);
+    if (audio_player_) {
+        const AVCodec *audio_codec =
+            avcodec_find_decoder(audio_player_->CodecID());
+        if (audio_codec) {
+            logger_->info("input audio codec {}:{}", audio_codec->name,
+                          audio_codec->long_name);
+            audio_player_->set_codec(audio_codec);
         } else {
-            logger_->error(
-                "failed to find audio decoder of codec id {}",
-                avutil::GetCodecName(audio_stream_->codecpar->codec_id));
+            logger_->error("failed to find audio decoder of codec id {}",
+                           avutil::GetCodecName(audio_player_->CodecID()));
+            return false;
         }
     }
 
@@ -467,37 +465,8 @@ bool FFPlayer::InitDecodeContext() {
         return false;
     }
 
-    if (audio_codec_) {
-        audio_decode_ctx_ = avcodec_alloc_context3(audio_codec_);
-        avcodec_parameters_to_context(audio_decode_ctx_,
-                                      audio_stream_->codecpar);
-
-        logger_->debug("audio input stream time_base {}, {}",
-                       audio_stream_->time_base.num,
-                       audio_stream_->time_base.den);
-        logger_->debug("audio input stream avg_frame_rate {}, {}",
-                       audio_stream_->avg_frame_rate.num,
-                       audio_stream_->avg_frame_rate.den);
-
-        auto err = avcodec_open2(audio_decode_ctx_, audio_codec_, NULL);
-        if (err < 0) {
-            logger_->error("failed to avcodec_open2, {}",
-                           avutil::ErrorString(err));
-
-            avcodec_free_context(&audio_decode_ctx_);
-            audio_decode_ctx_ = nullptr;
-        } else {
-            logger_->info(
-                "audio decoder time base {}/{}, output fmt {}, sample rate {}, "
-                "channels {}, "
-                "channel layout {}",
-                audio_decode_ctx_->time_base.num,
-                audio_decode_ctx_->time_base.den,
-                avutil::GetSampleFmtName(audio_decode_ctx_->sample_fmt),
-                audio_decode_ctx_->sample_rate,
-                audio_decode_ctx_->ch_layout.nb_channels,
-                avutil::ChannelLayoutDescribe(&audio_decode_ctx_->ch_layout));
-        }
+    if (audio_player_ && !audio_player_->InitDecodeContext()) {
+        return false;
     }
 
     logger_->debug("InitInputDecodeContext success");
@@ -505,54 +474,10 @@ bool FFPlayer::InitDecodeContext() {
 }
 
 bool FFPlayer::InitSwrContext() {
-    if (!audio_decode_ctx_)
+    if (!audio_player_)
         return true;
 
-    if (!ResampleFormatValid()) {
-        logger_->warn("resample format is not valid");
-        return true;
-    }
-
-    // 创建 SwrContext 对象
-    AVChannelLayout out_ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 输出的layout,
-    av_channel_layout_default(&out_ch_layout, resample_fmt_.channel_count);
-
-    AVChannelLayout in_ch_layout;
-    av_channel_layout_copy(&in_ch_layout, &audio_decode_ctx_->ch_layout);
-
-    int ret = swr_alloc_set_opts2(&swr_ctx_, &out_ch_layout,
-                                  resample_fmt_.sample_fmt, //输出的采样格式。
-                                  resample_fmt_.sample_rate, //输出采样率
-                                  &in_ch_layout, audio_decode_ctx_->sample_fmt,
-                                  audio_decode_ctx_->sample_rate, 0, nullptr);
-    if (ret < 0) {
-        logger_->error("swr_alloc_set_opts2 fail, {}",
-                       avutil::ErrorString(ret));
-        return false;
-    }
-
-    /* create resampler context 方式2 */
-    //    swr_ctx_ = swr_alloc();
-    //    if (!swr_ctx_) {
-    //        logger_->error("Could not allocate resampler context");
-    //        return false;
-    //    }
-
-    /* set options */
-    //    av_opt_set_chlayout(swr_ctx_, "in_chlayout", &src_ch_layout, 0);
-    //    av_opt_set_int(swr_ctx_, "in_sample_rate", src_rate, 0);
-    //    av_opt_set_sample_fmt(swr_ctx_, "in_sample_fmt", src_sample_fmt, 0);
-    //    av_opt_set_chlayout(swr_ctx_, "out_chlayout", &dst_ch_layout, 0);
-    //    av_opt_set_int(swr_ctx_, "out_sample_rate", dst_rate, 0);
-    //    av_opt_set_sample_fmt(swr_ctx_, "out_sample_fmt", dst_sample_fmt, 0);
-
-    /* initialize the resampling context */
-    if ((ret = swr_init(swr_ctx_)) < 0) {
-        logger_->error("swr_init fail, {}", avutil::ErrorString(ret));
-        return false;
-    }
-
-    return true;
+    return audio_player_->InitSwrContext();
 }
 
 bool FFPlayer::InitSwsContext() { return video_player_->InitSwsContext(); }
@@ -566,11 +491,11 @@ void FFPlayer::ResetInputContext() {
 }
 
 void FFPlayer::ResetDecodeContext() {
-    if (audio_decode_ctx_) {
-        avcodec_close(audio_decode_ctx_);
-        avcodec_free_context(&audio_decode_ctx_);
-        audio_decode_ctx_ = nullptr;
-    }
+    if (video_player_)
+        video_player_->ResetDecodeContext();
+
+    if (audio_player_)
+        audio_player_->ResetDecodeContext();
 }
 
 void FFPlayer::ResetSwrContext() {
@@ -585,174 +510,7 @@ bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
 }
 
 bool FFPlayer::HandleAudioFrame(AVPacket *pkt) {
-    if (!pkt || pkt->size <= 0)
-        return false;
-
-    // FIXME:
-    // pkt->dts = pkt->pts = audio_decode_dts_++;
-    // pkt->duration = 1;
-
-    int ret = avcodec_send_packet(audio_decode_ctx_, pkt);
-    if (AVERROR(EAGAIN) == ret) {
-        logger_->error(
-            "send audio packet failure, AVERROR(EAGAIN), input is not "
-            "accepted in the current state");
-        return false;
-    } else if (AVERROR_EOF == ret) {
-        logger_->error(
-            "send audio packet failure, AVERROR_EOF, the decoder has been "
-            "flushed, and no new packets can be sent to it (also "
-            "returned if more than 1 flush packet is sent");
-        return false;
-    } else if (AVERROR(EINVAL) == ret) {
-        logger_->error("send audio packet failure, AVERROR(EINVAL), codec not "
-                       "opened, it is an encoder, or requires flush");
-        return false;
-    } else if (AVERROR(ENOMEM) == ret) {
-        logger_->error(
-            "send audio packet failure, AVERROR(ENOMEM), failed to add "
-            "packet to internal queue, or similar other errors: "
-            "legitimate decoding errors");
-        return false;
-    } else if (ret < 0) {
-        logger_->error("send packet failure, {}", avutil::ErrorString(ret));
-        return false;
-    }
-    logger_->trace("audio avcodec_send_packet ok");
-
-    while (ret >= 0) {
-        ret = avcodec_receive_frame(audio_decode_ctx_, audio_frame_);
-
-        if (pkt && ret == AVERROR(EAGAIN)) {
-            break;
-        } else if (ret == AVERROR_EOF) {
-            break;
-        } else if (ret < 0) {
-            logger_->error("avcodec_receive_frame audio frame failure, {}",
-                           avutil::ErrorString(ret));
-            return false;
-        }
-
-        util::AtExit r([&]() { av_frame_unref(audio_frame_); });
-
-        logger_->trace(
-            "audio avcodec_receive_frame ok, fmt {}, nb_samples {}, duration "
-            "{}, pts {}",
-            avutil::GetSampleFmtName((AVSampleFormat)audio_frame_->format),
-            audio_frame_->nb_samples, audio_frame_->duration,
-            audio_frame_->pts);
-
-        // https://www.cnblogs.com/zjacky/p/16529648.html 可以写入AVFrame
-
-        // https://blog.csdn.net/u012117034/article/details/127537875
-        //        auto out_count = (int64_t)audio_frame_->nb_samples *
-        //                             resample_fmt_.sample_rate /
-        //                             audio_frame_->sample_rate +
-        //                         256;
-
-        // 采样数空间留有余量
-        auto out_count = audio_frame_->nb_samples * 3 / 2;
-
-        auto audio_buf_len =
-            av_samples_get_buffer_size(nullptr, resample_fmt_.channel_count,
-                                       out_count, resample_fmt_.sample_fmt, 0);
-        logger_->trace("out count {}, av_samples_get_buffer_size out size {} ",
-                       out_count, audio_buf_len);
-
-        uint8_t *audio_buf = new uint8_t[audio_buf_len];
-
-        // av_samples_alloc_array_and_samples
-        // av_samples_alloc和av_samples_get_buffer_size的计算空间是一样的。
-        //        int audio_buf_len =
-        //            av_samples_alloc(&audio_buf, nullptr,
-        //            resample_fmt_.channel_count,
-        //                             out_count, resample_fmt_.sample_fmt, 0);
-        //        logger_->trace("av_samples_alloc nb_samples {}, audio_buf_len
-        //        {}",
-        //                       out_count, audio_buf_len);
-
-        // 对于音频来说，extended_data 和
-        // data是一样的。音频更常用extended_data来表示
-        const uint8_t **in_data =
-            (const uint8_t **)audio_frame_->extended_data; // audio_frame_->data
-        int in_count = audio_frame_->nb_samples;
-
-        // swr_convert_frame
-        int out_nb_samples =
-            swr_convert(swr_ctx_, &audio_buf, audio_buf_len, in_data, in_count);
-        logger_->trace("out_nb_samples {}", out_nb_samples);
-
-        int data_size = out_nb_samples * resample_fmt_.channel_count *
-                        av_get_bytes_per_sample(resample_fmt_.sample_fmt);
-        logger_->trace("data size {}", data_size);
-
-        if (out_nb_samples < 0) {
-            logger_->error("swr_convert error, {}",
-                           avutil::ErrorString(out_nb_samples));
-        }
-
-        // QObject::startTimer: Timers cannot be started from another thread
-        double clock = audio_frame_->pts * av_q2d(audio_stream_->time_base);
-        if (audio_frame_cb_) {
-            audio_frame_cb_((char *)audio_buf, data_size, clock);
-        }
-
-        std::this_thread::sleep_for(std::chrono::microseconds(23220));
-
-        //        av_free(audio_buf);
-
-        logger_->info("destroy ...");
-
-        /*
-        // 转码音频帧
-        // 计算转码后的音频数据大小
-        int dstNbSamples = av_rescale_rnd(swr_get_delay(swrCtx, 44100) +
-        aacFrame->nb_samples, 44100, 44100, AV_ROUND_UP); int
-        dstBufferSize = av_samples_get_buffer_size(nullptr, 2,
-        dstNbSamples, AV_SAMPLE_FMT_S16, 0);
-
-        // 分配转码后的音频数据缓冲区
-        uint8_t *dstBuffer = static_cast<uint8_t
-        *>(av_malloc(dstBufferSize));
-
-        // 进行音频转码
-        int numSamples = swr_convert(audioSwsContext, &dstBuffer,
-        dstNbSamples, const_cast<const uint8_t **>(pAudioFrame->data),
-        pAudioFrame->nb_samples); if (numSamples < 0) { qDebug() <<
-        "音频转码失败"; av_freep(&dstBuffer);
-        }
-        else{
-            // 释放资源
-            // 将音频帧数据写入音频输出设备
-            outputDevice->write((const char *)dstBuffer, dstBufferSize);
-        }
-
-        // 计算音频帧播放时长
-        AVRational timeBase =
-        pFormatContext->streams[audioStream]->time_base; int64_t pts =
-        av_frame_get_best_effort_timestamp(pAudioFrame); double time =
-        av_q2d(timeBase) * pts;
-
-        // 延时播放下一帧
-        QEventLoop loop;
-        QTimer::singleShot(time * 1000, &loop, [&]() { loop.quit(); });
-        loop.exec(); */
-
-        // uint8_t *data[2] = {0};
-        //                if(!pcm)pcm = new
-        //                uint8_t[frame->nb_samples*2*2]; data[0] = pcm;
-        ////                int swr_convert(struct SwrContext *s,
-        /// uint8_t **out,
-        /// int out_count, / const uint8_t **in , int in_count);
-
-        //               ret = swr_convert(actx,
-        //                                   data, frame->nb_samples,
-        //                                   //输出 (const
-        //                                   uint8_t**)frame->data,frame->nb_samples
-        //                                   //输入
-    }
-
-    return true;
+    return audio_player_->HandleFrame(pkt);
 }
 
 int FFPlayer::InterruptCallback(void *context) {
@@ -802,14 +560,8 @@ void FFPlayer::ThreadFunc() {
                 if (video_player_ &&
                     video_player_->index() == pkt->stream_index) {
                     this->HandleVideoFrame(pkt);
-                } else if (pkt->stream_index == audio_index_) {
-                    auto pts_dur = pkt->pts - audio_pts;
-                    logger_->trace(
-                        "audio frame, pts {}, pts duration {}, ts duration {}",
-                        pkt->pts, pts_dur,
-                        pts_dur * av_q2d(audio_stream_->time_base));
-                    audio_pts = pkt->pts;
-
+                } else if (audio_player_ &&
+                           audio_player_->index() == pkt->stream_index) {
                     this->HandleAudioFrame(pkt);
                 }
 
@@ -837,9 +589,19 @@ void FFPlayer::ThreadFunc() {
 AVPlayer::AVPlayer(int idx, AVStream *strm) : index_(idx), stream_(strm) {
     if (!stream_)
         throw std::runtime_error("AVStream is null");
+
+    decoded_frame_ = av_frame_alloc();
+    if (!decoded_frame_)
+        throw std::runtime_error("av_frame_alloc fail");
 }
 
-AVPlayer::~AVPlayer() { ResetDecodeContext(); }
+AVPlayer::~AVPlayer() {
+    ResetDecodeContext();
+    if (decoded_frame_) {
+        av_frame_free(&decoded_frame_);
+        decoded_frame_ = nullptr;
+    }
+}
 
 void AVPlayer::ResetDecodeContext() {
     if (decode_ctx_) {
@@ -864,7 +626,6 @@ void AVPlayer::set_codec(const AVCodec *c) { codec_ = c; }
 VideoPlayer::VideoPlayer(int index, AVStream *stream)
     : AVPlayer(index, stream) {
     logger_ = util::log::GetLogger(__func__);
-    decoded_frame_ = av_frame_alloc();
 }
 
 VideoPlayer::~VideoPlayer() {
@@ -1219,3 +980,280 @@ AudioPlayer::AudioPlayer(int index, AVStream *stream)
 }
 
 AudioPlayer::~AudioPlayer() {}
+
+void AudioPlayer::set_resample_format(ResampleFormat fmt) {
+    resample_fmt_ = fmt;
+}
+
+void AudioPlayer::LogInput() {
+
+    auto audio_codecpar = stream_->codecpar;
+    logger_->info(
+        "input streams audio index = {}, codec id {}, sample fmt {}, sample "
+        "rate {}, channels {}, bits per sample {}, time_base {}/{}",
+        index_, avutil::GetCodecName(audio_codecpar->codec_id),
+        avutil::GetSampleFmtName((AVSampleFormat)audio_codecpar->format),
+        audio_codecpar->sample_rate, audio_codecpar->ch_layout.nb_channels,
+        audio_codecpar->bits_per_coded_sample, stream_->time_base.num,
+        stream_->time_base.den);
+}
+
+bool AudioPlayer::InitDecodeContext() {
+    if (!codec_) {
+        logger_->error("InitDecodeContext fail, AVCodec is null");
+        return false;
+    }
+
+    decode_ctx_ = avcodec_alloc_context3(codec_);
+    avcodec_parameters_to_context(decode_ctx_, stream_->codecpar);
+
+    logger_->debug("audio input stream time_base {}, {}",
+                   stream_->time_base.num, stream_->time_base.den);
+
+    auto err = avcodec_open2(decode_ctx_, codec_, NULL);
+    if (err < 0) {
+        logger_->error("failed to avcodec_open2, {}", avutil::ErrorString(err));
+
+        avcodec_free_context(&decode_ctx_);
+        decode_ctx_ = nullptr;
+    } else {
+        logger_->info("audio decoder time base {}/{}, output fmt {}, sample "
+                      "rate {}, channels {}, channel layout {}",
+                      decode_ctx_->time_base.num, decode_ctx_->time_base.den,
+                      avutil::GetSampleFmtName(decode_ctx_->sample_fmt),
+                      decode_ctx_->sample_rate,
+                      decode_ctx_->ch_layout.nb_channels,
+                      avutil::ChannelLayoutDescribe(&decode_ctx_->ch_layout));
+    }
+}
+
+bool AudioPlayer::HandleFrame(AVPacket *pkt) {
+    if (!pkt || pkt->size <= 0)
+        return false;
+
+    int ret = avcodec_send_packet(decode_ctx_, pkt);
+    if (AVERROR(EAGAIN) == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR(EAGAIN), input is not "
+            "accepted in the current state");
+        return false;
+    } else if (AVERROR_EOF == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR_EOF, the decoder has been "
+            "flushed, and no new packets can be sent to it (also "
+            "returned if more than 1 flush packet is sent");
+        return false;
+    } else if (AVERROR(EINVAL) == ret) {
+        logger_->error("send audio packet failure, AVERROR(EINVAL), codec not "
+                       "opened, it is an encoder, or requires flush");
+        return false;
+    } else if (AVERROR(ENOMEM) == ret) {
+        logger_->error(
+            "send audio packet failure, AVERROR(ENOMEM), failed to add "
+            "packet to internal queue, or similar other errors: "
+            "legitimate decoding errors");
+        return false;
+    } else if (ret < 0) {
+        logger_->error("send packet failure, {}", avutil::ErrorString(ret));
+        return false;
+    }
+    logger_->trace("audio avcodec_send_packet ok");
+
+    while (ret >= 0) {
+        ret = avcodec_receive_frame(decode_ctx_, decoded_frame_);
+
+        if (pkt && ret == AVERROR(EAGAIN)) {
+            break;
+        } else if (ret == AVERROR_EOF) {
+            break;
+        } else if (ret < 0) {
+            logger_->error("avcodec_receive_frame audio frame failure, {}",
+                           avutil::ErrorString(ret));
+            return false;
+        }
+
+        util::AtExit r([&]() { av_frame_unref(decoded_frame_); });
+
+        logger_->trace(
+            "audio avcodec_receive_frame ok, sample fmt {}, sample rate {}, "
+            "channels {}, nb_samples {}, duration {}, pts {}",
+            avutil::GetSampleFmtName((AVSampleFormat)decoded_frame_->format),
+            decoded_frame_->sample_rate, decoded_frame_->ch_layout.nb_channels,
+            decoded_frame_->nb_samples, decoded_frame_->duration,
+            decoded_frame_->pts);
+
+        // https://www.cnblogs.com/zjacky/p/16529648.html 可以写入AVFrame
+
+        // https://blog.csdn.net/u012117034/article/details/127537875
+        //        auto out_count = (int64_t)audio_frame_->nb_samples *
+        //                             resample_fmt_.sample_rate /
+        //                             audio_frame_->sample_rate +
+        //                         256;
+
+        if (swr_ctx_) {
+            // 采样数空间留有余量
+            auto out_count = decoded_frame_->nb_samples * 3 / 2;
+
+            auto audio_buf_len = av_samples_get_buffer_size(
+                nullptr, resample_fmt_.channel_count, out_count,
+                resample_fmt_.sample_fmt, 0);
+            logger_->trace(
+                "out count {}, av_samples_get_buffer_size out size {} ",
+                out_count, audio_buf_len);
+
+            uint8_t *audio_buf = new uint8_t[audio_buf_len];
+
+            // av_samples_alloc_array_and_samples
+            // av_samples_alloc和av_samples_get_buffer_size的计算空间是一样的。
+            //        int audio_buf_len =
+            //            av_samples_alloc(&audio_buf, nullptr,
+            //            resample_fmt_.channel_count,
+            //                             out_count, resample_fmt_.sample_fmt,
+            //                             0);
+            //        logger_->trace("av_samples_alloc nb_samples {},
+            //        audio_buf_len
+            //        {}",
+            //                       out_count, audio_buf_len);
+
+            // 对于音频来说，extended_data 和
+            // data是一样的。音频更常用extended_data来表示
+            const uint8_t **in_data =
+                (const uint8_t **)decoded_frame_->extended_data;
+            int in_count = decoded_frame_->nb_samples;
+
+            // swr_convert_frame。输出每帧的采样数
+            int out_nb_samples = swr_convert(swr_ctx_, &audio_buf,
+                                             audio_buf_len, in_data, in_count);
+            logger_->trace("out_nb_samples {}", out_nb_samples);
+            if (out_nb_samples < 0) {
+                logger_->error("swr_convert error, {}",
+                               avutil::ErrorString(out_nb_samples));
+                return false;
+            }
+
+            int data_size = out_nb_samples * resample_fmt_.channel_count *
+                            av_get_bytes_per_sample(resample_fmt_.sample_fmt);
+            logger_->trace("resample frame data size {}", data_size);
+
+            double clock = decoded_frame_->pts * av_q2d(stream_->time_base);
+            logger_->debug("audio frame pts {},  clock {}", decoded_frame_->pts,
+                           clock);
+            if (frame_cb_) {
+                frame_cb_((char *)audio_buf, data_size, clock);
+                logger_->debug("frame_cb_ {}, {}, {}", (void *)audio_buf,
+                               data_size, clock);
+            } else {
+                delete[] audio_buf;
+            }
+
+            // FIXME:
+            std::this_thread::sleep_for(std::chrono::microseconds(23220));
+
+            /*
+        // 转码音频帧
+        // 计算转码后的音频数据大小
+        int dstNbSamples = av_rescale_rnd(swr_get_delay(swrCtx, 44100) +
+        aacFrame->nb_samples, 44100, 44100, AV_ROUND_UP); int
+        dstBufferSize = av_samples_get_buffer_size(nullptr, 2,
+        dstNbSamples, AV_SAMPLE_FMT_S16, 0);
+
+        // 分配转码后的音频数据缓冲区
+        uint8_t *dstBuffer = static_cast<uint8_t
+        *>(av_malloc(dstBufferSize));
+
+        // 进行音频转码
+        int numSamples = swr_convert(audioSwsContext, &dstBuffer,
+        dstNbSamples, const_cast<const uint8_t **>(pAudioFrame->data),
+        pAudioFrame->nb_samples); if (numSamples < 0) { qDebug() <<
+        "音频转码失败"; av_freep(&dstBuffer);
+        }
+        else{
+            // 释放资源
+            // 将音频帧数据写入音频输出设备
+            outputDevice->write((const char *)dstBuffer, dstBufferSize);
+        }
+
+        // 计算音频帧播放时长
+        AVRational timeBase =
+        pFormatContext->streams[audioStream]->time_base; int64_t pts =
+        av_frame_get_best_effort_timestamp(pAudioFrame); double time =
+        av_q2d(timeBase) * pts;
+
+        // 延时播放下一帧
+        QEventLoop loop;
+        QTimer::singleShot(time * 1000, &loop, [&]() { loop.quit(); });
+        loop.exec(); */
+
+            // uint8_t *data[2] = {0};
+            //                if(!pcm)pcm = new
+            //                uint8_t[frame->nb_samples*2*2]; data[0] = pcm;
+            ////                int swr_convert(struct SwrContext *s,
+            /// uint8_t **out,
+            /// int out_count, / const uint8_t **in , int in_count);
+
+            //               ret = swr_convert(actx,
+            //                                   data, frame->nb_samples,
+            //                                   //输出 (const
+            //                                   uint8_t**)frame->data,frame->nb_samples
+            //                                   //输入
+        }
+    }
+
+    return true;
+}
+
+bool AudioPlayer::InitSwrContext() {
+    if (!decode_ctx_)
+        return true;
+
+    if (!ResampleFormatValid()) {
+        logger_->warn("resample format is not valid");
+        return true;
+    }
+
+    // 创建 SwrContext 对象
+    AVChannelLayout out_ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 输出的layout,
+    av_channel_layout_default(&out_ch_layout, resample_fmt_.channel_count);
+
+    AVChannelLayout in_ch_layout;
+    av_channel_layout_copy(&in_ch_layout, &decode_ctx_->ch_layout);
+
+    int ret = swr_alloc_set_opts2(&swr_ctx_, &out_ch_layout,
+                                  resample_fmt_.sample_fmt, //输出的采样格式。
+                                  resample_fmt_.sample_rate, //输出采样率
+                                  &in_ch_layout, decode_ctx_->sample_fmt,
+                                  decode_ctx_->sample_rate, 0, nullptr);
+    if (ret < 0) {
+        logger_->error("swr_alloc_set_opts2 fail, {}",
+                       avutil::ErrorString(ret));
+        return false;
+    }
+
+    /* create resampler context 方式2 */
+    //    swr_ctx_ = swr_alloc();
+    //    if (!swr_ctx_) {
+    //        logger_->error("Could not allocate resampler context");
+    //        return false;
+    //    }
+
+    /* set options */
+    //    av_opt_set_chlayout(swr_ctx_, "in_chlayout", &src_ch_layout, 0);
+    //    av_opt_set_int(swr_ctx_, "in_sample_rate", src_rate, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "in_sample_fmt", src_sample_fmt, 0);
+    //    av_opt_set_chlayout(swr_ctx_, "out_chlayout", &dst_ch_layout, 0);
+    //    av_opt_set_int(swr_ctx_, "out_sample_rate", dst_rate, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "out_sample_fmt", dst_sample_fmt, 0);
+
+    /* initialize the resampling context */
+    if ((ret = swr_init(swr_ctx_)) < 0) {
+        logger_->error("swr_init fail, {}", avutil::ErrorString(ret));
+        return false;
+    }
+
+    return true;
+}
+
+bool AudioPlayer::ResampleFormatValid() const {
+    return resample_fmt_.channel_count > 0 && resample_fmt_.sample_rate > 0 &&
+           resample_fmt_.sample_fmt != AV_SAMPLE_FMT_NONE;
+}

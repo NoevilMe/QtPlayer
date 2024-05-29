@@ -111,6 +111,8 @@ void AudioSpeaker::run() {
         // qDebug() << "audio sink write " << wlen
         //          << ", bytes free: " << audio_sink_->bytesFree();
 
+        qDebug()<<"queued frame clock "<<frame_data.clock << ", audio clock " << AudioClock();
+
         delete[] frame_data.buf;
     }
 
