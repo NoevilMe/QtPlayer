@@ -16,12 +16,6 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-struct ResampleFormat {
-    int sample_rate = 0;
-    AVSampleFormat sample_fmt = AV_SAMPLE_FMT_NONE;
-    int channel_count = 0;
-};
-
 const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
                                          AVHWDeviceType hwtype);
 
@@ -29,6 +23,32 @@ struct AvFunctionInterrupt {
     long long func_start_timestamp = 0;
     long long func_end_timestamp = 0;
     bool interrupted = false;
+};
+
+enum class MediaType {
+    kMediaNone = 0,
+    kMediaFile = 1,
+    kMediaNetwork,
+    kMediaCapture
+};
+
+struct MediaSource {
+    MediaType type = MediaType::kMediaNone;
+    std::string src;
+};
+
+struct AudioFormat {
+    AVSampleFormat sample_fmt = AV_SAMPLE_FMT_NONE;
+    int sample_rate = 0;
+    int channel_count = 0;
+};
+
+struct VideoFormat {
+    int width = 0;
+    int height = 0;
+    AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
+    AVRational sample_aspect_ratio = {0, 0};
+    AVColorPrimaries color_primaries = AVCOL_PRI_UNSPECIFIED;
 };
 
 class VideoPlayer;
@@ -39,13 +59,35 @@ public:
     FFPlayer();
     ~FFPlayer();
 
-    bool Start();
-    void Stop();
-
+    //设置源，open前
     void SetMediaSource(MediaSource media);
+
+    // 先打开，检测视频流、音频流
+    bool Open();
+    // 是否打开
+    bool is_open() const { return is_open_; }
+
+    // 含有视频流、音频流
+    bool HasVideo() const;
+    bool HasAudio() const;
+    // 获取音频参数，用于重采样
+    bool GetAudioFormat(AudioFormat *out_fmt);
+    // 获取视频参数，用于窗口调整
+    bool GetVideoFormat(VideoFormat *out_fmt);
+
+    // 设置音频重采样参数，Play前
+    void SetAudioResampleFormat(AudioFormat fmt);
     void SetAudioDeviceFormat(AudioDeviceFormat fmt);
 
-    void SetFrameCallback(const std::function<void(AVFrame *)> &cb) {
+    // 再播放
+    bool Play();
+    // 是否播放
+    bool IsPlaying() { return running_.load(); }
+
+    // 停止播放
+    void Stop();
+
+    void SetVideoFrameCallback(const std::function<void(AVFrame *)> &cb) {
         video_frame_cb_ = cb;
     }
 
@@ -58,10 +100,10 @@ public:
         audio_clock_cb_ = cb;
     }
 
+protected:
     void PlayVideoFrame(AVFrame *frame, double clock);
     void PlayAudioFrame(char *data, int length, double clock);
 
-protected:
     bool ResampleFormatValid() const;
 
     bool InitInputContext();
@@ -70,6 +112,8 @@ protected:
     bool InitDecodeContext();
     bool InitSwrContext();
     bool InitSwsContext();
+
+    void Release();
 
     void ResetInputContext();
     void ResetDecodeContext();
@@ -86,7 +130,9 @@ protected:
 
 protected:
     MediaSource media_source_;
-    ResampleFormat resample_fmt_;
+    AudioFormat resample_fmt_;
+
+    bool is_open_ = false;
 
     AvFunctionInterrupt interrupt_;
 
@@ -100,19 +146,6 @@ protected:
     std::unique_ptr<VideoPlayer> video_player_;
     std::unique_ptr<AudioPlayer> audio_player_;
 
-    // audio
-    int64_t audio_decode_dts_ = 0;
-    AVFrame *audio_frame_ = nullptr;
-    long long audio_pts = 0;
-
-    SwrContext *swr_ctx_ = nullptr;
-
-    long long ts_get_ = 0;
-    long long ts_decode_ = 0;
-    long long ts_hw_ = 0;  // transfer or map
-    long long ts_sws_ = 0; // sws_scale
-    long long ts_cb_ = 0;
-
     std::atomic_bool running_;
     std::thread thd_;
     std::function<void(AVFrame *)> video_frame_cb_;
@@ -121,10 +154,10 @@ protected:
     std::shared_ptr<spdlog::logger> logger_;
 };
 
-class AVPlayer {
+class StreamPlayer {
 public:
-    AVPlayer(int index, AVStream *);
-    virtual ~AVPlayer();
+    StreamPlayer(int index, AVStream *);
+    virtual ~StreamPlayer();
 
     int index() const { return index_; }
     AVCodecID CodecID() const;
@@ -153,10 +186,12 @@ protected:
     std::shared_ptr<spdlog::logger> logger_;
 };
 
-class VideoPlayer : public AVPlayer {
+class VideoPlayer : public StreamPlayer {
 public:
     VideoPlayer(int index, AVStream *stream);
     ~VideoPlayer();
+
+    bool GetVideoFormat(VideoFormat *out_fmt);
 
     int Fps();
 
@@ -205,12 +240,14 @@ private:
     std::function<void(AVFrame *, double)> frame_cb_;
 };
 
-class AudioPlayer : public AVPlayer {
+class AudioPlayer : public StreamPlayer {
 public:
     AudioPlayer(int index, AVStream *stream);
     ~AudioPlayer();
 
-    void set_resample_format(ResampleFormat fmt);
+    bool GetSampleFormat(AudioFormat *out_fmt);
+
+    void set_resample_format(AudioFormat fmt);
 
     // AVPlayer interface
     void LogInput() override;
@@ -228,7 +265,7 @@ private:
     bool ResampleFormatValid() const;
 
 private:
-    ResampleFormat resample_fmt_;
+    AudioFormat resample_fmt_;
     SwrContext *swr_ctx_ = nullptr;
 
     std::function<void(char *, int, double)> frame_cb_;

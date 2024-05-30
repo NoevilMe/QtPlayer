@@ -16,7 +16,7 @@ PlayerForm::PlayerForm(QWidget *parent)
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
 
-    listOutputAudioDevices();
+    //    listOutputAudioDevices();
 }
 
 PlayerForm::~PlayerForm() {
@@ -45,21 +45,45 @@ bool PlayerForm::openMedia(MediaSource media) {
 
     player_.reset(new FFPlayer);
     player_->SetMediaSource(media);
-    AudioDeviceFormat deviceFmt;
-    deviceFmt.channel_count = 2;
-    deviceFmt.sample_rate = 44100;
-    deviceFmt.sample_fmt = AudioSampleFormat::Int16;
-    player_->SetAudioDeviceFormat(deviceFmt);
-    player_->SetFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
-                                        ui->openGLWidget,
-                                        std::placeholders::_1));
-    player_->SetAudioFrameCallback(
-        std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
-                  std::placeholders::_2, std::placeholders::_3));
-    player_->SetAudioClockCallback([=]() { return speaker_->AudioClock(); });
-    speaker_->start();
+    if (!player_->Open()) {
+        qDebug() << "打开失败";
+        return false;
+    }
 
-    return player_->Start();
+    if (player_->HasAudio()) {
+        AudioFormat audioFmt;
+        if (!player_->GetAudioFormat(&audioFmt)) {
+            qDebug() << "获取音频参数失败";
+            return false;
+        }
+
+        speaker_.reset(new AudioSpeaker);
+
+        AudioDeviceFormat deviceFmt;
+        deviceFmt.channel_count = 2;
+        deviceFmt.sample_rate = 44100;
+        deviceFmt.sample_fmt = AudioSampleFormat::Int16;
+        player_->SetAudioDeviceFormat(deviceFmt);
+
+        player_->SetAudioFrameCallback(
+            std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
+                      std::placeholders::_2, std::placeholders::_3));
+        player_->SetAudioClockCallback(
+            [=]() { return speaker_->AudioClock(); });
+        speaker_->start();
+    }
+
+    player_->SetVideoFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
+                                             ui->openGLWidget,
+                                             std::placeholders::_1));
+
+    if (player_->Play()) {
+        qDebug() << "播放成功";
+        return true;
+    } else {
+        qDebug() << "播放失败";
+        return false;
+    }
 }
 
 void PlayerForm::playAudio(char *buf, int size, double clock) {
@@ -90,8 +114,6 @@ void PlayerForm::listOutputAudioDevices() {
                  << "], channel [" << dev.minimumChannelCount() << ", "
                  << dev.maximumChannelCount() << "]";
     }
-
-    speaker_.reset(new AudioSpeaker);
 }
 
 // bool MainWindow::eventFilter(QObject *watched, QEvent *event) {

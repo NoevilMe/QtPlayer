@@ -3,17 +3,6 @@
 
 #include <string>
 
-enum class MediaType {
-    kMediaNone = 0,
-    kMediaFile = 1,
-    kMediaNetwork,
-    kMediaCapture
-};
-
-struct MediaSource {
-    MediaType type = MediaType::kMediaNone;
-    std::string src;
-};
 
 enum class AudioSampleFormat : unsigned short {
     Unknown,

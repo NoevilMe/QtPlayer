@@ -2,6 +2,7 @@
 #define OPENMEDIADIALOG_H
 
 #include "av_def.h"
+#include "player/ffplayer.h"
 
 #include <QDialog>
 

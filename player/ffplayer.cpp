@@ -61,33 +61,75 @@ FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
 
-    audio_frame_ = av_frame_alloc();
-
     avutil::GetAllDevices();
 }
 
 FFPlayer::~FFPlayer() {
     Stop();
 
-    ResetInputContext();
-    ResetDecodeContext();
+    media_source_.type = MediaType::kMediaNone;
+    media_source_.src.clear();
 
-    if (audio_frame_) {
-        av_frame_free(&audio_frame_);
-        audio_frame_ = nullptr;
-    }
+    Release();
 
     logger_->debug("~FFPlayer destroyed");
 }
 
-bool FFPlayer::Start() {
+bool FFPlayer::Open() {
     if (media_source_.type == MediaType::kMediaNone) {
         logger_->error("no media source");
         return false;
     }
 
-    if (!InitInputContext()) {
+    Release();
+
+    return InitInputContext();
+}
+
+bool FFPlayer::HasVideo() const { return (bool)video_player_; }
+
+bool FFPlayer::HasAudio() const { return (bool)audio_player_; }
+
+bool FFPlayer::GetAudioFormat(AudioFormat *out_fmt) {
+    if (audio_player_) {
+        return audio_player_->GetSampleFormat(out_fmt);
+    } else {
         return false;
+    }
+}
+
+bool FFPlayer::GetVideoFormat(VideoFormat *out_fmt) {
+    if (video_player_) {
+        return video_player_->GetVideoFormat(out_fmt);
+    } else {
+        return false;
+    }
+}
+
+void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
+
+bool FFPlayer::Play() {
+    if (is_playing_) {
+        return true;
+    }
+
+    if (!is_open()) {
+        logger_->error("input is not opened");
+        return false;
+    }
+
+    if (video_player_) {
+        video_player_->SetFrameCallback(std::bind(&FFPlayer::PlayVideoFrame,
+                                                  this, std::placeholders::_1,
+                                                  std::placeholders::_2));
+    }
+
+    // 播放之前应该设置重采样参数
+    if (audio_player_) {
+        audio_player_->SetFrameCallback(
+            std::bind(&FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
+                      std::placeholders::_2, std::placeholders::_3));
+        audio_player_->set_resample_format(resample_fmt_);
     }
 
     if (!InitInputCodec()) {
@@ -142,9 +184,7 @@ void FFPlayer::Stop() {
         thd_.join();
     }
 
-    if (video_player_) {
-        video_player_.reset();
-    }
+    Release();
 
     media_source_.type = MediaType::kMediaNone;
     media_source_.src.clear();
@@ -357,6 +397,8 @@ bool FFPlayer::InitInputContext() {
         audio_player_->LogInput();
     }
 
+    is_open_ = true;
+
     return true;
 }
 
@@ -482,6 +524,14 @@ bool FFPlayer::InitSwrContext() {
 
 bool FFPlayer::InitSwsContext() { return video_player_->InitSwsContext(); }
 
+void FFPlayer::Release() {
+    ResetInputContext();
+    ResetDecodeContext();
+
+    video_player_.reset();
+    audio_player_.reset();
+}
+
 void FFPlayer::ResetInputContext() {
     if (fmt_ctx_) {
         avformat_close_input(&fmt_ctx_);
@@ -491,18 +541,17 @@ void FFPlayer::ResetInputContext() {
 }
 
 void FFPlayer::ResetDecodeContext() {
-    if (video_player_)
+    if (video_player_) {
         video_player_->ResetDecodeContext();
+    }
 
     if (audio_player_)
         audio_player_->ResetDecodeContext();
 }
 
 void FFPlayer::ResetSwrContext() {
-    if (swr_ctx_) {
-        swr_free(&swr_ctx_);
-        swr_ctx_ = nullptr;
-    }
+    if (audio_player_)
+        audio_player_->ResetSwrContext();
 }
 
 bool FFPlayer::HandleVideoFrame(AVPacket *pkt) {
@@ -586,7 +635,8 @@ void FFPlayer::ThreadFunc() {
     logger_->info("run end");
 }
 
-AVPlayer::AVPlayer(int idx, AVStream *strm) : index_(idx), stream_(strm) {
+StreamPlayer::StreamPlayer(int idx, AVStream *strm)
+    : index_(idx), stream_(strm) {
     if (!stream_)
         throw std::runtime_error("AVStream is null");
 
@@ -595,7 +645,7 @@ AVPlayer::AVPlayer(int idx, AVStream *strm) : index_(idx), stream_(strm) {
         throw std::runtime_error("av_frame_alloc fail");
 }
 
-AVPlayer::~AVPlayer() {
+StreamPlayer::~StreamPlayer() {
     ResetDecodeContext();
     if (decoded_frame_) {
         av_frame_free(&decoded_frame_);
@@ -603,7 +653,7 @@ AVPlayer::~AVPlayer() {
     }
 }
 
-void AVPlayer::ResetDecodeContext() {
+void StreamPlayer::ResetDecodeContext() {
     if (decode_ctx_) {
         if (decode_ctx_->hw_device_ctx) {
             av_buffer_unref(&decode_ctx_->hw_device_ctx);
@@ -615,22 +665,38 @@ void AVPlayer::ResetDecodeContext() {
     }
 }
 
-AVCodecID AVPlayer::CodecID() const { return stream_->codecpar->codec_id; }
+AVCodecID StreamPlayer::CodecID() const { return stream_->codecpar->codec_id; }
 
-AVCodecParameters *AVPlayer::CodecPar() const { return stream_->codecpar; }
+AVCodecParameters *StreamPlayer::CodecPar() const { return stream_->codecpar; }
 
-AVRational AVPlayer::TimeBase() { return stream_->time_base; }
+AVRational StreamPlayer::TimeBase() { return stream_->time_base; }
 
-void AVPlayer::set_codec(const AVCodec *c) { codec_ = c; }
+void StreamPlayer::set_codec(const AVCodec *c) { codec_ = c; }
 
 VideoPlayer::VideoPlayer(int index, AVStream *stream)
-    : AVPlayer(index, stream) {
+    : StreamPlayer(index, stream) {
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+        throw std::runtime_error("Not a video stream");
+    }
     logger_ = util::log::GetLogger(__func__);
 }
 
 VideoPlayer::~VideoPlayer() {
     ResetSwsContext();
     ResetHWDeviceContext();
+}
+
+bool VideoPlayer::GetVideoFormat(VideoFormat *out_fmt) {
+    if (out_fmt) {
+        out_fmt->width = stream_->codecpar->width;
+        out_fmt->height = stream_->codecpar->height;
+        out_fmt->color_primaries = stream_->codecpar->color_primaries;
+        out_fmt->sample_aspect_ratio = stream_->codecpar->sample_aspect_ratio;
+        out_fmt->pix_fmt = (AVPixelFormat)stream_->codecpar->format;
+        return true;
+    }
+
+    return false;
 }
 
 int VideoPlayer::Fps() { return (int)av_q2d(stream_->avg_frame_rate); }
@@ -759,6 +825,7 @@ bool VideoPlayer::InitDecodeContext() {
 }
 
 bool VideoPlayer::InitSwsContext() {
+    // 软解的情况，使用AV_PIX_FMT_YUV420P作为目标格式
     if (hwtype_ == AV_HWDEVICE_TYPE_NONE && decode_ctx_->pix_fmt != sws_fmt_) {
         // AV_PIX_FMT_YUV420P
         sws_width_ = decode_ctx_->width >> 2 << 2; // align = 4
@@ -975,15 +1042,26 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
 }
 
 AudioPlayer::AudioPlayer(int index, AVStream *stream)
-    : AVPlayer(index, stream) {
+    : StreamPlayer(index, stream) {
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
+        throw std::runtime_error("Not a audio stream");
+    }
     logger_ = util::log::GetLogger(__func__);
 }
 
 AudioPlayer::~AudioPlayer() {}
 
-void AudioPlayer::set_resample_format(ResampleFormat fmt) {
-    resample_fmt_ = fmt;
+bool AudioPlayer::GetSampleFormat(AudioFormat *out_fmt) {
+    if (out_fmt) {
+        out_fmt->sample_fmt = (AVSampleFormat)stream_->codecpar->format;
+        out_fmt->sample_rate = stream_->codecpar->sample_rate;
+        out_fmt->channel_count = stream_->codecpar->ch_layout.nb_channels;
+        return true;
+    }
+    return false;
 }
+
+void AudioPlayer::set_resample_format(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 void AudioPlayer::LogInput() {
 
@@ -1016,6 +1094,7 @@ bool AudioPlayer::InitDecodeContext() {
 
         avcodec_free_context(&decode_ctx_);
         decode_ctx_ = nullptr;
+        return false;
     } else {
         logger_->info("audio decoder time base {}/{}, output fmt {}, sample "
                       "rate {}, channels {}, channel layout {}",
@@ -1024,6 +1103,7 @@ bool AudioPlayer::InitDecodeContext() {
                       decode_ctx_->sample_rate,
                       decode_ctx_->ch_layout.nb_channels,
                       avutil::ChannelLayoutDescribe(&decode_ctx_->ch_layout));
+        return true;
     }
 }
 
@@ -1251,6 +1331,13 @@ bool AudioPlayer::InitSwrContext() {
     }
 
     return true;
+}
+
+void AudioPlayer::ResetSwrContext() {
+    if (swr_ctx_) {
+        swr_free(&swr_ctx_);
+        swr_ctx_ = nullptr;
+    }
 }
 
 bool AudioPlayer::ResampleFormatValid() const {
