@@ -1,7 +1,8 @@
 #include "ffplayer.h"
-#include "av_util.h"
 
 #include <fstream>
+
+#include "av_util.h"
 
 extern "C" {
 // #include <libavcodec/avcodec.h>
@@ -11,6 +12,11 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 // #include <libavutil/timestamp.h>
 };
+
+// 帧间33/40ms
+#define VIDEO_PACKET_MAX_SIZE 100
+// 帧间46ms， 100个包
+#define AUDIO_PACKET_MAX_SIZE 100
 
 #define OPEN_INPUT_TIMEOUT_MS 10000
 
@@ -27,7 +33,6 @@ const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
         }
 
         if (g_av_logger_) {
-
             if (AV_HWDEVICE_TYPE_NONE == config->device_type) {
                 // d3d11va_vld 没有加速器
                 g_av_logger_->debug(
@@ -109,7 +114,7 @@ bool FFPlayer::GetVideoFormat(VideoFormat *out_fmt) {
 void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
-    if (is_playing_) {
+    if (running_.load()) {
         return true;
     }
 
@@ -148,7 +153,7 @@ bool FFPlayer::Play() {
         return false;
     }
 
-    thd_ = std::thread([=]() { this->ThreadFunc(); });
+    StartThreads();
 
     // std::vector<std::string> encoder_names{
     //     "h264_vaapi", "h264_qsv",    "h264_cuvid", "hevc_vaapi",  "hevc_qsv",
@@ -180,9 +185,8 @@ bool FFPlayer::Play() {
 
 void FFPlayer::Stop() {
     running_.store(false);
-    if (thd_.joinable()) {
-        thd_.join();
-    }
+
+    StopThreads();
 
     Release();
 
@@ -212,7 +216,7 @@ void FFPlayer::SetAudioDeviceFormat(AudioDeviceFormat fmt) {
         resample_fmt_.sample_fmt = AV_SAMPLE_FMT_FLT;
         break;
     default:
-        //输出的采样格式。绝⼤部分声卡⽀持
+        // 输出的采样格式。绝⼤部分声卡⽀持
         resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
         break;
     }
@@ -472,7 +476,7 @@ bool FFPlayer::InitInputCodec() {
 
             if (hwtype == AV_HWDEVICE_TYPE_NONE ||
                 video_player_->InitHWDeviceContext(codec, hwtype)) {
-                video_player_->set_codec(codec); //非硬件加速的时候必须明确设置
+                video_player_->set_codec(codec); // 非硬件加速的时候必须明确设置
                 video_player_->LogHw();
                 break;
             }
@@ -502,7 +506,6 @@ bool FFPlayer::InitInputCodec() {
 }
 
 bool FFPlayer::InitDecodeContext() {
-
     if (!video_player_->InitDecodeContext()) {
         return false;
     }
@@ -576,63 +579,157 @@ int FFPlayer::InterruptCallback(void *context) {
     }
 }
 
-void FFPlayer::ThreadFunc() {
+void FFPlayer::StartThreads() {
     running_.store(true);
-    logger_->info("running ...");
 
-    util::AtExit er([=]() {
-        running_.store(false);
-        logger_->info("running done");
-    });
-
-    AVPacket *pkt = av_packet_alloc();
-    if (!pkt) {
-        logger_->error("av_packet_alloc error");
-        return;
+    if (video_player_) {
+        video_thread_ = std::thread(&FFPlayer::VideoThreadFunc, this);
     }
 
-    util::AtExit ep([&]() { av_packet_free(&pkt); });
+    if (audio_player_) {
+        audio_thread_ = std::thread(&FFPlayer::AudioThreadFunc, this);
+    }
+
+    read_thread_ = std::thread(&FFPlayer::ReadThreadFunc, this);
+}
+
+void FFPlayer::StopThreads() {
+    if (read_thread_.joinable()) {
+        read_thread_.join();
+    }
+
+    if (video_thread_.joinable()) {
+        video_thread_.join();
+    }
+
+    if (audio_thread_.joinable()) {
+        audio_thread_.join();
+    }
+}
+
+void FFPlayer::ReadThreadFunc() {
+    logger_->info("ReadThreadFunc running ...");
+
+    util::AtExit er([=]() {
+        // 如果异常退出，需要停止其他线程
+        running_.store(false);
+        logger_->info("ReadThreadFunc running done");
+    });
 
     try {
         int err = 0;
         while (running_.load()) {
+
+            if (video_queue_.size() > VIDEO_PACKET_MAX_SIZE ||
+                audio_queue_.size() > AUDIO_PACKET_MAX_SIZE) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
+            AVPacket *pkt = av_packet_alloc();
+            if (!pkt) {
+                logger_->error("av_packet_alloc error");
+                break;
+            }
+
             interrupt_.func_start_timestamp = util::TimeMilliseconds();
+
             err = av_read_frame(fmt_ctx_, pkt);
             if (0 == err) {
-                // pkt->time_base = {1, 10000000};
-                logger_->trace("-----------------------------");
-                logger_->trace("av_read_frame ok, index {}, size {}, timebase "
-                               "{}/{}, pts {}, duration {}",
-                               pkt->stream_index, pkt->size, pkt->time_base.num,
-                               pkt->time_base.den, pkt->pts, pkt->duration);
+                logger_->trace("----------- av_read_frame {}, index {}, size "
+                               "{}, pts {}, duration {} -----------",
+                               (void *)pkt->data, pkt->stream_index, pkt->size,
+                               pkt->pts, pkt->duration);
 
                 if (video_player_ &&
                     video_player_->index() == pkt->stream_index) {
-                    this->HandleVideoFrame(pkt);
+                    std::lock_guard<std::mutex> lock(video_mutex_);
+                    video_queue_.emplace_back(pkt);
+                    video_cv_.notify_one();
+
                 } else if (audio_player_ &&
                            audio_player_->index() == pkt->stream_index) {
-                    this->HandleAudioFrame(pkt);
+                    std::lock_guard<std::mutex> lock(audio_mutex_);
+                    audio_queue_.emplace_back(pkt);
+                    audio_cv_.notify_one();
+                } else {
+                    av_packet_free(&pkt);
                 }
 
-                av_packet_unref(pkt);
-            } else if (AVERROR(EAGAIN) == err) {
-                logger_->trace("av_read_frame AVERROR(EAGAIN)");
-                std::this_thread::sleep_for(std::chrono::milliseconds(25));
             } else {
                 logger_->error("ffmpeg av_read_frame failure, {}",
                                avutil::ErrorString(err));
+                av_packet_free(&pkt);
                 break;
             }
         }
     } catch (std::runtime_error &e) {
-        logger_->error("runtime_error, {}", e.what());
+        logger_->error("ReadThreadFunc runtime_error, {}", e.what());
     } catch (std::exception &e) {
-        logger_->error("exception, {}", e.what());
+        logger_->error("ReadThreadFunc exception, {}", e.what());
     } catch (...) {
-        logger_->error("run unknown exception");
+        logger_->error("ReadThreadFunc unknown exception");
+    }
+}
+
+void FFPlayer::VideoThreadFunc() {
+    logger_->info("VideoThreadFunc running ...");
+
+    try {
+        int err = 0;
+        while (running_.load()) {
+            std::unique_lock<std::mutex> lock(video_mutex_);
+            while (video_queue_.empty()) {
+                video_cv_.wait(lock);
+            }
+
+            AVPacket *video_pkt = video_queue_.front();
+            video_queue_.pop_front();
+            logger_->trace("video frame {} ", (void *)video_pkt->data);
+
+            HandleVideoFrame(video_pkt);
+
+            av_packet_free(&video_pkt);
+        }
+    } catch (std::runtime_error &e) {
+        logger_->error("VideoThreadFunc runtime_error, {}", e.what());
+    } catch (std::exception &e) {
+        logger_->error("VideoThreadFunc exception, {}", e.what());
+    } catch (...) {
+        logger_->error("VideoThreadFunc unknown exception");
     }
 
-    logger_->info("run end");
+    logger_->info("VideoThreadFunc run end");
+}
+
+void FFPlayer::AudioThreadFunc() {
+    logger_->info("AudioThreadFunc running ...");
+
+    try {
+        int err = 0;
+        while (running_.load()) {
+            std::unique_lock<std::mutex> lock(audio_mutex_);
+            while (audio_queue_.empty()) {
+                audio_cv_.wait(lock);
+            }
+
+            AVPacket *audio_pkt = audio_queue_.front();
+            audio_queue_.pop_front();
+            logger_->trace("audio frame {} ", (void *)audio_pkt->data);
+
+            HandleAudioFrame(audio_pkt);
+
+            av_packet_free(&audio_pkt);
+        }
+    } catch (std::runtime_error &e) {
+        logger_->error("AudioThreadFunc runtime_error, {}", e.what());
+    } catch (std::exception &e) {
+        logger_->error("AudioThreadFunc exception, {}", e.what());
+    } catch (...) {
+        logger_->error("AudioThreadFunc unknown exception");
+    }
+
+    logger_->info("AudioThreadFunc run end");
 }
 
 StreamPlayer::StreamPlayer(int idx, AVStream *strm)
@@ -1064,7 +1161,6 @@ bool AudioPlayer::GetSampleFormat(AudioFormat *out_fmt) {
 void AudioPlayer::set_resample_format(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 void AudioPlayer::LogInput() {
-
     auto audio_codecpar = stream_->codecpar;
     logger_->info(
         "input streams audio index = {}, codec id {}, sample fmt {}, sample "
@@ -1299,8 +1395,8 @@ bool AudioPlayer::InitSwrContext() {
     av_channel_layout_copy(&in_ch_layout, &decode_ctx_->ch_layout);
 
     int ret = swr_alloc_set_opts2(&swr_ctx_, &out_ch_layout,
-                                  resample_fmt_.sample_fmt, //输出的采样格式。
-                                  resample_fmt_.sample_rate, //输出采样率
+                                  resample_fmt_.sample_fmt, // 输出的采样格式。
+                                  resample_fmt_.sample_rate, // 输出采样率
                                   &in_ch_layout, decode_ctx_->sample_fmt,
                                   decode_ctx_->sample_rate, 0, nullptr);
     if (ret < 0) {

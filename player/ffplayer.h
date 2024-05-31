@@ -2,7 +2,6 @@
 #define FFPLAYER_H
 
 #include "av_def.h"
-
 #include "util/util.h"
 
 extern "C" {
@@ -15,6 +14,8 @@ extern "C" {
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
+
+#include <list>
 
 const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
                                          AVHWDeviceType hwtype);
@@ -59,7 +60,7 @@ public:
     FFPlayer();
     ~FFPlayer();
 
-    //设置源，open前
+    // 设置源，open前
     void SetMediaSource(MediaSource media);
 
     // 先打开，检测视频流、音频流
@@ -126,7 +127,12 @@ protected:
 
     static int InterruptCallback(void *context);
 
-    void ThreadFunc();
+    void StartThreads();
+    void StopThreads();
+
+    void ReadThreadFunc();
+    void VideoThreadFunc();
+    void AudioThreadFunc();
 
 protected:
     MediaSource media_source_;
@@ -141,13 +147,23 @@ protected:
 
     // 输入
     AVFormatContext *fmt_ctx_ = nullptr;
-    // video
 
+    // video
+    std::thread video_thread_;
     std::unique_ptr<VideoPlayer> video_player_;
+    std::list<AVPacket *> video_queue_;
+    std::mutex video_mutex_;
+    std::condition_variable video_cv_;
+
+    // audio
+    std::thread audio_thread_;
     std::unique_ptr<AudioPlayer> audio_player_;
+    std::list<AVPacket *> audio_queue_;
+    std::mutex audio_mutex_;
+    std::condition_variable audio_cv_;
 
     std::atomic_bool running_;
-    std::thread thd_;
+    std::thread read_thread_;
     std::function<void(AVFrame *)> video_frame_cb_;
     std::function<void(char *, int, double)> audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
