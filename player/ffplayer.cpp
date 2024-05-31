@@ -66,7 +66,7 @@ FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
 
-    avutil::GetAllDevices();
+    // avutil::GetAllDevices();
 }
 
 FFPlayer::~FFPlayer() {
@@ -77,7 +77,7 @@ FFPlayer::~FFPlayer() {
 
     Release();
 
-    logger_->debug("~FFPlayer destroyed");
+    logger_->debug("~FFPlayer destroyed ====================");
 }
 
 bool FFPlayer::Open() {
@@ -184,9 +184,12 @@ bool FFPlayer::Play() {
 }
 
 void FFPlayer::Stop() {
-    running_.store(false);
+    SetRunning(false);
 
     StopThreads();
+
+    video_queue_.clear();
+    audio_queue_.clear();
 
     Release();
 
@@ -580,7 +583,7 @@ int FFPlayer::InterruptCallback(void *context) {
 }
 
 void FFPlayer::StartThreads() {
-    running_.store(true);
+    SetRunning(true);
 
     if (video_player_) {
         video_thread_ = std::thread(&FFPlayer::VideoThreadFunc, this);
@@ -607,13 +610,23 @@ void FFPlayer::StopThreads() {
     }
 }
 
+void FFPlayer::SetRunning(bool run) {
+    running_.store(run);
+    logger_->trace("set running {}", running_.load());
+}
+
 void FFPlayer::ReadThreadFunc() {
-    logger_->info("ReadThreadFunc running ...");
+    logger_->info("ReadThreadFunc begin running {}", running_.load());
 
     util::AtExit er([=]() {
         // 如果异常退出，需要停止其他线程
-        running_.store(false);
+        SetRunning(false);
+        video_cv_.notify_all();
+        audio_cv_.notify_all();
         logger_->info("ReadThreadFunc running done");
+        if (play_done_cb_) {
+            play_done_cb_();
+        }
     });
 
     try {
@@ -655,7 +668,10 @@ void FFPlayer::ReadThreadFunc() {
                 } else {
                     av_packet_free(&pkt);
                 }
-
+            } else if (err == AVERROR_EOF) {
+                logger_->debug("End of File");
+                av_packet_free(&pkt);
+                break;
             } else {
                 logger_->error("ffmpeg av_read_frame failure, {}",
                                avutil::ErrorString(err));
@@ -670,6 +686,8 @@ void FFPlayer::ReadThreadFunc() {
     } catch (...) {
         logger_->error("ReadThreadFunc unknown exception");
     }
+
+    logger_->debug("ReadThreadFunc end running {}", running_.load());
 }
 
 void FFPlayer::VideoThreadFunc() {
@@ -679,8 +697,12 @@ void FFPlayer::VideoThreadFunc() {
         int err = 0;
         while (running_.load()) {
             std::unique_lock<std::mutex> lock(video_mutex_);
-            while (video_queue_.empty()) {
-                video_cv_.wait(lock);
+            video_cv_.wait(lock, [&]() {
+                return !video_queue_.empty() || !running_.load();
+            });
+
+            if (!running_.load()) {
+                break;
             }
 
             AVPacket *video_pkt = video_queue_.front();
@@ -709,8 +731,12 @@ void FFPlayer::AudioThreadFunc() {
         int err = 0;
         while (running_.load()) {
             std::unique_lock<std::mutex> lock(audio_mutex_);
-            while (audio_queue_.empty()) {
-                audio_cv_.wait(lock);
+            audio_cv_.wait(lock, [&]() {
+                return !audio_queue_.empty() || !running_.load();
+            });
+
+            if (!running_.load()) {
+                break;
             }
 
             AVPacket *audio_pkt = audio_queue_.front();

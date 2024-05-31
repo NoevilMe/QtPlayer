@@ -5,7 +5,9 @@
 #include <QMutexLocker>
 
 AudioSpeaker::AudioSpeaker(QObject *parent)
-    : QThread{parent}, buffer_size_(0), queued_clock_(0.0) {}
+    : QThread{parent}, buffer_size_(0), queued_clock_(0.0) {
+    // connect(this, &AudioSpeaker::stopSignal, this, &AudioSpeaker::stopSlot);
+}
 
 AudioSpeaker::~AudioSpeaker() {
     if (audio_sink_) {
@@ -16,7 +18,15 @@ AudioSpeaker::~AudioSpeaker() {
 void AudioSpeaker::Stop() {
     requestInterruption();
     cond_.notify_one();
+    // qDebug() << QThread::currentThreadId() << " stopSignal";
+    // emit stopSignal();
 }
+
+// void AudioSpeaker::stopSlot() {
+//     qDebug() << QThread::currentThreadId() << " stopSlot";
+//     requestInterruption();
+//     cond_.notify_one();
+// }
 
 QAudioDevice AudioSpeaker::DefaultDevice() {
     return QMediaDevices::defaultAudioOutput();
@@ -70,8 +80,8 @@ void AudioSpeaker::run() {
     QAudioDevice device = DefaultDevice();
     format_ = PreferredFormat(&device);
 
-    qDebug() << "use audio device " << device.description() << ", format "
-             << format_;
+    qDebug() << QThread::currentThreadId() << "use audio device "
+             << device.description() << ", format " << format_;
 
     audio_sink_.reset(new QAudioSink(device, format_));
     connect(audio_sink_.get(), &QAudioSink::stateChanged, this,
@@ -83,7 +93,8 @@ void AudioSpeaker::run() {
     audio_sink_->setBufferSize(buffer_size_);
     audio_device_ = audio_sink_->start();
 
-    qDebug() << "audio sink buf size: " << audio_sink_->bufferSize();
+    qDebug() << QThread::currentThreadId()
+             << "audio sink buf size: " << audio_sink_->bufferSize();
 
     while (!isInterruptionRequested()) {
         mutex_.lock();
@@ -93,6 +104,8 @@ void AudioSpeaker::run() {
 
         if (isInterruptionRequested()) {
             mutex_.unlock();
+
+            qDebug() << QThread::currentThreadId() << "InterruptionRequested()";
             break;
         }
 
@@ -111,12 +124,13 @@ void AudioSpeaker::run() {
         // qDebug() << "audio sink write " << wlen
         //          << ", bytes free: " << audio_sink_->bytesFree();
 
-        qDebug()<<"queued frame clock "<<frame_data.clock << ", audio clock " << AudioClock();
+        qDebug() << QThread::currentThreadId() << "queued frame clock "
+                 << frame_data.clock << ", audio clock " << AudioClock();
 
         delete[] frame_data.buf;
     }
 
-    qDebug() << "run finished ";
+    qDebug() << QThread::currentThreadId() << "run finished ";
 
     disconnect(audio_sink_.get(), &QAudioSink::stateChanged, this,
                &AudioSpeaker::handleStateChanged);

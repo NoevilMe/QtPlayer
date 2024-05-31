@@ -17,10 +17,10 @@ PlayerForm::PlayerForm(QWidget *parent)
     ui->listWidgetFiles->hide();
 
     //    listOutputAudioDevices();
+    connect(this, &PlayerForm::playDoneSignal, this, &PlayerForm::playDoneSlot);
 }
 
 PlayerForm::~PlayerForm() {
-    delete ui;
     qDebug() << "PlayerForm::~PlayerForm() ";
 
     if (player_) {
@@ -39,9 +39,30 @@ PlayerForm::~PlayerForm() {
     }
 
     qDebug() << "PlayerForm::~PlayerForm() done ";
+
+    delete ui;
 }
 
 bool PlayerForm::openMedia(MediaSource media) {
+    // try {
+    if (player_) {
+        // 如果有正在执行的播放器，PlayDoneCallback的延迟执行会释放掉新的播放器
+        player_->SetPlayDoneCallback(nullptr);
+
+        if (player_->IsPlaying()) {
+            player_->Stop();
+        }
+        player_.reset();
+    }
+
+    if (speaker_) {
+        qDebug() << "reset speaker ...";
+        speaker_->Stop();
+        // speaker_->quit();
+        // speaker_->requestInterruption();
+        speaker_->wait();
+        speaker_.reset();
+    }
 
     player_.reset(new FFPlayer);
     player_->SetMediaSource(media);
@@ -76,6 +97,10 @@ bool PlayerForm::openMedia(MediaSource media) {
     player_->SetVideoFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
                                              ui->openGLWidget,
                                              std::placeholders::_1));
+    player_->SetPlayDoneCallback([=]() {
+        // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
+        emit this->playDoneSignal();
+    });
 
     if (player_->Play()) {
         qDebug() << "播放成功";
@@ -84,6 +109,13 @@ bool PlayerForm::openMedia(MediaSource media) {
         qDebug() << "播放失败";
         return false;
     }
+    // } catch (std::exception &e) {
+    //     qDebug() << "exception " << e.what();
+    //     return false;
+    // } catch (...) {
+    //     qDebug() << "unknown exception";
+    //     return false;
+    // }
 }
 
 void PlayerForm::playAudio(char *buf, int size, double clock) {
@@ -91,16 +123,16 @@ void PlayerForm::playAudio(char *buf, int size, double clock) {
 }
 
 void PlayerForm::clickPushButtonFullScreen() {
-    //对pushButton实现模拟点击
-    //定义左键点击事件，Qt::NoModifier代表无其他修饰键被按下
-    // QMouseEvent mouseDown(QEvent::MouseButtonPress, QPoint(1, 1),
-    //                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    // //定义左键释放事件，Qt::NoModifier代表无其他修饰键被按下
-    // QMouseEvent mouseUp(QEvent::MouseButtonRelease, QPoint(1, 1),
-    //                     Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    // //向按钮pushButton发送鼠标左键按下事件，之后发送鼠标左键释放事件，模拟一次点击
-    // QApplication::sendEvent(ui->pushButtonFullScreen, &mouseDown);
-    // QApplication::sendEvent(ui->pushButtonFullScreen, &mouseUp);
+    // 对pushButton实现模拟点击
+    // 定义左键点击事件，Qt::NoModifier代表无其他修饰键被按下
+    //  QMouseEvent mouseDown(QEvent::MouseButtonPress, QPoint(1, 1),
+    //                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    //  //定义左键释放事件，Qt::NoModifier代表无其他修饰键被按下
+    //  QMouseEvent mouseUp(QEvent::MouseButtonRelease, QPoint(1, 1),
+    //                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    //  //向按钮pushButton发送鼠标左键按下事件，之后发送鼠标左键释放事件，模拟一次点击
+    //  QApplication::sendEvent(ui->pushButtonFullScreen, &mouseDown);
+    //  QApplication::sendEvent(ui->pushButtonFullScreen, &mouseUp);
 }
 
 void PlayerForm::listOutputAudioDevices() {
@@ -167,6 +199,11 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
     //     this->showNormal();
     //     //        this->show();
     // }
+}
+
+void PlayerForm::playDoneSlot() {
+    qDebug() << "playDoneSlot";
+    player_.reset();
 }
 
 void PlayerForm::closeEvent(QCloseEvent *event) {

@@ -1,12 +1,11 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-
 #include <QWidget>
 
+#include "audiospeaker.h"
 #include "av_def.h"
 #include "player/ffplayer.h"
-#include "audiospeaker.h"
 
 class QIODevice;
 
@@ -26,10 +25,13 @@ public:
     bool openMedia(MediaSource media);
     void playAudio(char *buf, int size, double clock);
 
+signals:
+    void playDoneSignal();
+
 private slots:
     void on_pushButtonList_toggled(bool checked);
     void on_pushButtonFullScreen_toggled(bool checked);
-
+    void playDoneSlot();
 
     // QWidget interface
 protected:

@@ -16,9 +16,9 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
     installWindowAgent();
 
-    pagePlayer = new PlayerForm();
+    pagePlayer = new PlayerForm(this);
     pagePlayer->setObjectName("player");
-    pageMonitor = new MultiPlayerForm();
+    pageMonitor = new MultiPlayerForm(this);
     pageMonitor->setObjectName("monitor");
     ui->stackedWidget->addWidget(pagePlayer);
     ui->stackedWidget->addWidget(pageMonitor);

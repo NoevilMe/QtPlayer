@@ -24,6 +24,12 @@ public:
     void write(const char *data, int len, double clock);
     double AudioClock();
 
+// signals:
+//     void stopSignal();
+
+// private slots:
+//     void stopSlot();
+
     // QThread interface
 protected:
     struct AudioSpeakerFrame {

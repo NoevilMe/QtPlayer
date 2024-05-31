@@ -101,6 +101,10 @@ public:
         audio_clock_cb_ = cb;
     }
 
+    void SetPlayDoneCallback(const std::function<void(void)> &cb) {
+        play_done_cb_ = cb;
+    }
+
 protected:
     void PlayVideoFrame(AVFrame *frame, double clock);
     void PlayAudioFrame(char *data, int length, double clock);
@@ -130,6 +134,7 @@ protected:
     void StartThreads();
     void StopThreads();
 
+    void SetRunning(bool run);
     void ReadThreadFunc();
     void VideoThreadFunc();
     void AudioThreadFunc();
@@ -167,6 +172,7 @@ protected:
     std::function<void(AVFrame *)> video_frame_cb_;
     std::function<void(char *, int, double)> audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
+    std::function<void(void)> play_done_cb_;
     std::shared_ptr<spdlog::logger> logger_;
 };
 
