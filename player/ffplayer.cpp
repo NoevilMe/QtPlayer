@@ -71,12 +71,6 @@ FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
 
 FFPlayer::~FFPlayer() {
     Stop();
-
-    media_source_.type = MediaType::kMediaNone;
-    media_source_.src.clear();
-
-    Release();
-
     logger_->debug("~FFPlayer destroyed ====================");
 }
 
@@ -181,20 +175,6 @@ bool FFPlayer::Play() {
     // }
 
     return true;
-}
-
-void FFPlayer::Stop() {
-    SetRunning(false);
-
-    StopThreads();
-
-    video_queue_.clear();
-    audio_queue_.clear();
-
-    Release();
-
-    media_source_.type = MediaType::kMediaNone;
-    media_source_.src.clear();
 }
 
 void FFPlayer::SetMediaSource(MediaSource media) {
@@ -582,6 +562,16 @@ int FFPlayer::InterruptCallback(void *context) {
     }
 }
 
+void FFPlayer::Stop() {
+    StopThreads();
+    Release();
+
+    video_queue_.clear();
+    audio_queue_.clear();
+    media_source_.type = MediaType::kMediaNone;
+    media_source_.src.clear();
+}
+
 void FFPlayer::StartThreads() {
     SetRunning(true);
 
@@ -597,6 +587,13 @@ void FFPlayer::StartThreads() {
 }
 
 void FFPlayer::StopThreads() {
+    SetRunning(false);
+    video_cv_.notify_all();
+    audio_cv_.notify_all();
+    JoinThreads();
+}
+
+void FFPlayer::JoinThreads() {
     if (read_thread_.joinable()) {
         read_thread_.join();
     }
@@ -687,6 +684,15 @@ void FFPlayer::ReadThreadFunc() {
         logger_->error("ReadThreadFunc unknown exception");
     }
 
+    logger_->debug("ReadThreadFunc wait queue begin, video queue size {}, "
+                   "audio queue size {}",
+                   video_queue_.size(), audio_queue_.size());
+    while (!video_queue_.empty() || !audio_queue_.empty()) {
+        logger_->trace("wait util queue empty");
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    logger_->debug("ReadThreadFunc wait queue end");
+
     logger_->debug("ReadThreadFunc end running {}", running_.load());
 }
 
@@ -707,10 +713,10 @@ void FFPlayer::VideoThreadFunc() {
 
             AVPacket *video_pkt = video_queue_.front();
             video_queue_.pop_front();
+            lock.unlock();
+
             logger_->trace("video frame {} ", (void *)video_pkt->data);
-
             HandleVideoFrame(video_pkt);
-
             av_packet_free(&video_pkt);
         }
     } catch (std::runtime_error &e) {
@@ -721,7 +727,7 @@ void FFPlayer::VideoThreadFunc() {
         logger_->error("VideoThreadFunc unknown exception");
     }
 
-    logger_->info("VideoThreadFunc run end");
+    logger_->info("VideoThreadFunc running end");
 }
 
 void FFPlayer::AudioThreadFunc() {
@@ -741,10 +747,10 @@ void FFPlayer::AudioThreadFunc() {
 
             AVPacket *audio_pkt = audio_queue_.front();
             audio_queue_.pop_front();
+            lock.unlock();
+
             logger_->trace("audio frame {} ", (void *)audio_pkt->data);
-
             HandleAudioFrame(audio_pkt);
-
             av_packet_free(&audio_pkt);
         }
     } catch (std::runtime_error &e) {
@@ -755,7 +761,7 @@ void FFPlayer::AudioThreadFunc() {
         logger_->error("AudioThreadFunc unknown exception");
     }
 
-    logger_->info("AudioThreadFunc run end");
+    logger_->info("AudioThreadFunc running end");
 }
 
 StreamPlayer::StreamPlayer(int idx, AVStream *strm)
@@ -807,6 +813,7 @@ VideoPlayer::VideoPlayer(int index, AVStream *stream)
 VideoPlayer::~VideoPlayer() {
     ResetSwsContext();
     ResetHWDeviceContext();
+    logger_->debug("~VideoPlayer destroyed");
 }
 
 bool VideoPlayer::GetVideoFormat(VideoFormat *out_fmt) {
@@ -1172,7 +1179,10 @@ AudioPlayer::AudioPlayer(int index, AVStream *stream)
     logger_ = util::log::GetLogger(__func__);
 }
 
-AudioPlayer::~AudioPlayer() {}
+AudioPlayer::~AudioPlayer() {
+    ResetSwrContext();
+    logger_->debug("~AudioPlayer destroyed");
+}
 
 bool AudioPlayer::GetSampleFormat(AudioFormat *out_fmt) {
     if (out_fmt) {

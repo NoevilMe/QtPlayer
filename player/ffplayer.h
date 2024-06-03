@@ -133,6 +133,8 @@ protected:
 
     void StartThreads();
     void StopThreads();
+    void JoinThreads();
+
 
     void SetRunning(bool run);
     void ReadThreadFunc();

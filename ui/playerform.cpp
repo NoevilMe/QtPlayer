@@ -44,9 +44,8 @@ PlayerForm::~PlayerForm() {
 }
 
 bool PlayerForm::openMedia(MediaSource media) {
-    // try {
     if (player_) {
-        // 如果有正在执行的播放器，PlayDoneCallback的延迟执行会释放掉新的播放器
+        // 如果有正在执行的播放器，PlayDoneCallback的延迟执行可能会释放掉新的播放器
         player_->SetPlayDoneCallback(nullptr);
 
         if (player_->IsPlaying()) {
@@ -109,13 +108,6 @@ bool PlayerForm::openMedia(MediaSource media) {
         qDebug() << "播放失败";
         return false;
     }
-    // } catch (std::exception &e) {
-    //     qDebug() << "exception " << e.what();
-    //     return false;
-    // } catch (...) {
-    //     qDebug() << "unknown exception";
-    //     return false;
-    // }
 }
 
 void PlayerForm::playAudio(char *buf, int size, double clock) {
