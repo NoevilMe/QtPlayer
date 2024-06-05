@@ -16,6 +16,11 @@ PlayerForm::PlayerForm(QWidget *parent)
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
 
+    timerProgress = new QTimer(this); // 定时器-获取当前视频时间
+    connect(timerProgress, &QTimer::timeout, this,
+            &PlayerForm::slotTimerTimeOut);
+    timerProgress->setInterval(500);
+
     //    listOutputAudioDevices();
     connect(this, &PlayerForm::playDoneSignal, this, &PlayerForm::playDoneSlot);
 }
@@ -23,20 +28,8 @@ PlayerForm::PlayerForm(QWidget *parent)
 PlayerForm::~PlayerForm() {
     qDebug() << "PlayerForm::~PlayerForm() ";
 
-    if (player_) {
-        player_->Stop();
-        player_.reset();
-    }
-
-    qDebug() << "stop speaker ...";
-
-    if (speaker_) {
-        speaker_->Stop();
-        // speaker_->quit();
-        // speaker_->requestInterruption();
-        speaker_->wait();
-        speaker_.reset();
-    }
+    stopPlayer();
+    stopSpeaker();
 
     qDebug() << "PlayerForm::~PlayerForm() done ";
 
@@ -44,24 +37,8 @@ PlayerForm::~PlayerForm() {
 }
 
 bool PlayerForm::openMedia(MediaSource media) {
-    if (player_) {
-        // 如果有正在执行的播放器，PlayDoneCallback的延迟执行可能会释放掉新的播放器
-        player_->SetPlayDoneCallback(nullptr);
-
-        if (player_->IsPlaying()) {
-            player_->Stop();
-        }
-        player_.reset();
-    }
-
-    if (speaker_) {
-        qDebug() << "reset speaker ...";
-        speaker_->Stop();
-        // speaker_->quit();
-        // speaker_->requestInterruption();
-        speaker_->wait();
-        speaker_.reset();
-    }
+    stopPlayer();
+    stopSpeaker();
 
     player_.reset(new FFPlayer);
     player_->SetMediaSource(media);
@@ -69,6 +46,9 @@ bool PlayerForm::openMedia(MediaSource media) {
         qDebug() << "打开失败";
         return false;
     }
+
+    qDebug() << "total seconds " << player_->GetTotalSeconds();
+    onTotalSeconds(player_->GetTotalSeconds());
 
     if (player_->HasAudio()) {
         AudioFormat audioFmt;
@@ -100,6 +80,8 @@ bool PlayerForm::openMedia(MediaSource media) {
         // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
         emit this->playDoneSignal();
     });
+
+    timerProgress->start();
 
     if (player_->Play()) {
         qDebug() << "播放成功";
@@ -137,6 +119,49 @@ void PlayerForm::listOutputAudioDevices() {
                  << dev.minimumSampleRate() << ", " << dev.maximumSampleRate()
                  << "], channel [" << dev.minimumChannelCount() << ", "
                  << dev.maximumChannelCount() << "]";
+    }
+}
+
+void PlayerForm::onTotalSeconds(double seconds) {
+
+    int sec = (int)seconds;
+    ui->horizontalSliderProgress->setRange(0, sec);
+
+    QString totalTime;
+    QString hStr = QString("0%1").arg(sec / 3600);
+    QString mStr = QString("0%1").arg(sec / 60 % 60);
+    QString sStr = QString("0%1").arg(sec % 60);
+    if (hStr == "00") {
+        totalTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
+    } else {
+        totalTime =
+            QString("%1:%2:%3").arg(hStr).arg(mStr.right(2)).arg(sStr.right(2));
+    }
+
+    ui->labelTotalTime->setText(totalTime);
+}
+
+void PlayerForm::stopPlayer() {
+    if (player_) {
+        qDebug() << "reset player ...";
+
+        // 如果有正在执行的播放器，PlayDoneCallback的延迟执行可能会释放掉新的播放器
+        player_->SetPlayDoneCallback(nullptr);
+
+        if (player_->IsPlaying()) {
+            player_->Stop();
+        }
+        player_.reset();
+    }
+}
+
+void PlayerForm::stopSpeaker() {
+    qDebug() << "stop speaker ...";
+    if (speaker_) {
+        qDebug() << "reset speaker ...";
+        speaker_->Stop();
+        speaker_->wait();
+        speaker_.reset();
     }
 }
 
@@ -196,6 +221,29 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
 void PlayerForm::playDoneSlot() {
     qDebug() << "playDoneSlot";
     player_.reset();
+    timerProgress->stop();
+}
+
+void PlayerForm::slotTimerTimeOut() {
+    if (QObject::sender() == timerProgress) {
+        qint64 Sec = player_->GetClock();
+        ui->horizontalSliderProgress->setValue(Sec);
+
+        QString curTime;
+        QString hStr = QString("0%1").arg(Sec / 3600);
+        QString mStr = QString("0%1").arg(Sec / 60 % 60);
+        QString sStr = QString("0%1").arg(Sec % 60);
+        if (hStr == "00") {
+            curTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
+        } else {
+            curTime = QString("%1:%2:%3")
+                          .arg(hStr)
+                          .arg(mStr.right(2))
+                          .arg(sStr.right(2));
+        }
+
+        ui->labelCurrentTime->setText(curTime);
+    }
 }
 
 void PlayerForm::closeEvent(QCloseEvent *event) {

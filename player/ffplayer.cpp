@@ -105,6 +105,33 @@ bool FFPlayer::GetVideoFormat(VideoFormat *out_fmt) {
     }
 }
 
+double FFPlayer::GetTotalSeconds() {
+    if (fmt_ctx_) {
+        return (double)fmt_ctx_->duration / AV_TIME_BASE;
+    } else {
+        logger_->error("fmt context is null");
+        return 0;
+    }
+}
+
+long long FFPlayer::GetDuration() {
+    if (fmt_ctx_) {
+        return fmt_ctx_->duration;
+    } else {
+        logger_->error("fmt context is null");
+        return 0;
+    }
+}
+
+double FFPlayer::GetClock() {
+    if (audio_clock_cb_) {
+        return audio_clock_cb_();
+    } else {
+        logger_->error("audio_clock_cb_ is null, need other clock");
+        return 0;
+    }
+}
+
 void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
@@ -687,7 +714,8 @@ void FFPlayer::ReadThreadFunc() {
     logger_->debug("ReadThreadFunc wait queue begin, video queue size {}, "
                    "audio queue size {}",
                    video_queue_.size(), audio_queue_.size());
-    while (!video_queue_.empty() || !audio_queue_.empty()) {
+    while (running_.load() &&
+           (!video_queue_.empty() || !audio_queue_.empty())) {
         logger_->trace("wait util queue empty");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

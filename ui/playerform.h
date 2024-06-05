@@ -33,6 +33,8 @@ private slots:
     void on_pushButtonFullScreen_toggled(bool checked);
     void playDoneSlot();
 
+    void slotTimerTimeOut();
+
     // QWidget interface
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -42,6 +44,11 @@ private:
     void clickPushButtonFullScreen();
     void listOutputAudioDevices();
 
+    void onTotalSeconds(double seconds);
+
+    void stopPlayer();
+    void stopSpeaker();
+
 private:
     Ui::PlayerForm *ui;
 
@@ -49,6 +56,8 @@ private:
     QWidget *fsWidget_ = nullptr;
     QWidget *fsParent_ = nullptr;
     Qt::WindowFlags fsFlags_;
+
+     QTimer *timerProgress; //定时器-获取当前视频时间
 
     std::unique_ptr<AudioSpeaker> speaker_;
 

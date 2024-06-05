@@ -76,6 +76,12 @@ public:
     // 获取视频参数，用于窗口调整
     bool GetVideoFormat(VideoFormat *out_fmt);
 
+    // 获取总时长
+    double GetTotalSeconds();
+    long long GetDuration();
+    // 获取已经播放的时间
+    double GetClock();
+
     // 设置音频重采样参数，Play前
     void SetAudioResampleFormat(AudioFormat fmt);
     void SetAudioDeviceFormat(AudioDeviceFormat fmt);
@@ -134,7 +140,6 @@ protected:
     void StartThreads();
     void StopThreads();
     void JoinThreads();
-
 
     void SetRunning(bool run);
     void ReadThreadFunc();

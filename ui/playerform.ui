@@ -166,7 +166,7 @@ width: 20%;
            <item>
             <layout class="QHBoxLayout" name="horizontalLayoutSlider">
              <item>
-              <widget class="QSlider" name="horizontalSlider">
+              <widget class="QSlider" name="horizontalSliderProgress">
                <property name="maximumSize">
                 <size>
                  <width>16777215</width>
@@ -225,7 +225,7 @@ width: 20%;
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="label">
+              <widget class="QLabel" name="labelCurrentTime">
                <property name="text">
                 <string>00:00:00</string>
                </property>
@@ -239,7 +239,7 @@ width: 20%;
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="label_3">
+              <widget class="QLabel" name="labelTotalTime">
                <property name="text">
                 <string>00:00:00</string>
                </property>
