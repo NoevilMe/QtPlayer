@@ -53,6 +53,8 @@ set(PROJECT_SOURCES
         player/device.h
         util/util.cpp
         util/util.h
+        util/iconhelper.cpp
+        util/iconhelper.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)

@@ -16,9 +16,11 @@ PlayerForm::PlayerForm(QWidget *parent)
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
 
+    // loadIcons();
+
     timerProgress = new QTimer(this); // 定时器-获取当前视频时间
     connect(timerProgress, &QTimer::timeout, this,
-            &PlayerForm::slotTimerTimeOut);
+            &PlayerForm::timerTimeoutSlot);
     timerProgress->setInterval(500);
 
     //    listOutputAudioDevices();
@@ -224,7 +226,7 @@ void PlayerForm::playDoneSlot() {
     timerProgress->stop();
 }
 
-void PlayerForm::slotTimerTimeOut() {
+void PlayerForm::timerTimeoutSlot() {
     if (QObject::sender() == timerProgress) {
         qint64 Sec = player_->GetClock();
         ui->horizontalSliderProgress->setValue(Sec);
@@ -248,4 +250,25 @@ void PlayerForm::slotTimerTimeOut() {
 
 void PlayerForm::closeEvent(QCloseEvent *event) {
     qDebug() << "PlayerForm::closeEvent";
+}
+
+void PlayerForm::loadIcons() {
+    iconHelper.reset(new IconHelper(":/font/fa-regular-400.ttf",
+                                    "Font Awesome 6 Pro Regular"));
+
+    // QImage img = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600, 600).toImage();
+     QPixmap pix1 = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600, 600);
+    // img.save("play.png");
+     QPixmap pix2 = iconHelper->getPixmap1("#308704", 0x25b6, 600, 600, 600);
+
+     QIcon icon;
+     icon.addPixmap(pix1, QIcon::Active);
+     icon.addPixmap(pix2, QIcon::Normal);
+
+    ui->pushButtonPlay->setIcon(icon);
+    ui->pushButtonPlay->setIconSize(QSize(42, 42));
+    // ui->pushButtonPlay->setStyleSheet("QPushButton#pushButtonPlay:hover{"
+    //                                   "border:1px solid transparent;"
+    //                                   "}");
+    // ui->pushButtonPlay->
 }

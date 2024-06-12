@@ -14,90 +14,7 @@
    <string>MainWindow</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">QWidget#centralwidget QPushButton{
-background:transparent;
-border:none;
-max-width:30px;
-min-width:30px;
-max-height:30px;
-min-height:30px;
-}
-
-QWidget#centralwidget  QPushButton:hover{
-border:1px solid transparent;
-}
-
-QWidget#centralwidget QPushButton#pushButtonPlay{
-background:transparent;
-border:none;
-max-width:40px;
-min-width:40px;
-max-height:40px;
-min-height:40px;
-image:url(:/images/Play.png);
-}
-
-QWidget#centralwidget QPushButton#pushButtonPlay:hover{
-border:1px solid transparent;
-}
-
-QWidget#centralwidget QPushButton#pushButtonPlay:checked{
-image:url(:/images/Pause.png);
-}
-
-QPushButton#pushButtonSlow{
-image:url(:/images/Rewind.png);
-}
-
-QPushButton#pushButtonFast{
-image:url(:/images/Forward.png);
-}
-
-QPushButton#pushButtonList{
-image:url(:/images/Settings.png);
-}
-
-QPushButton#pushButtonPrevious{
-image:url(:/images/Previous.png);
-}
-
-QPushButton#pushButtonNext{
-image:url(:/images/Next.png);
-}
-
-QPushButton#pushButtonStop{
-image:url(:/images/Stop.png);
-}
-
-
-QPushButton#pushButtonVolume{
-image:url(:/images/Volume.png);
-}
-
-QPushButton#pushButtonCircle{
-image:url(:/images/Circle.png);
-}
-
-QPushButton#ListCirclePlay{
-image:url(:/images/Circle.png);
-}
-QPushButton#SingleCirclePlay{
-image:url(:/images/Circle1.png);
-}
-QPushButton#RandomCirclePlay{
-image:url(:/images/Circle2.png);
-}
-
-QPushButton#pushButtonFullScreen{
-image:url(:/images/Fullscreen.png);
-}
-
-QWidget#centralwidget QListWidget{
-background:transparent;
-border:none;
-width: 20%;
-}
-</string>
+   <string notr="true"/>
   </property>
   <layout class="QGridLayout" name="gridLayout">
    <property name="leftMargin">
@@ -163,6 +80,21 @@ width: 20%;
         <item>
          <widget class="QWidget" name="widgetControl" native="true">
           <layout class="QVBoxLayout" name="verticalLayoutControl">
+           <property name="spacing">
+            <number>2</number>
+           </property>
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>2</number>
+           </property>
            <item>
             <layout class="QHBoxLayout" name="horizontalLayoutSlider">
              <item>
@@ -182,13 +114,15 @@ width: 20%;
            </item>
            <item>
             <layout class="QHBoxLayout" name="horizontalLayout_2">
-             <item>
-              <widget class="QPushButton" name="pushButtonSlow">
-               <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
+             <property name="spacing">
+              <number>8</number>
+             </property>
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
              <item>
               <widget class="QPushButton" name="pushButtonPrevious">
                <property name="text">
@@ -204,13 +138,6 @@ width: 20%;
               </widget>
              </item>
              <item>
-              <widget class="QPushButton" name="pushButtonFast">
-               <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
-             <item>
               <widget class="QPushButton" name="pushButtonNext">
                <property name="text">
                 <string/>
@@ -219,6 +146,20 @@ width: 20%;
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonStop">
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="pushButtonSlow">
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="pushButtonFast">
                <property name="text">
                 <string/>
                </property>
@@ -355,7 +296,7 @@ width: 20%;
   <customwidget>
    <class>YuvVideoWidget</class>
    <extends>QOpenGLWidget</extends>
-   <header location="global">ui/yuvvideowidget.h</header>
+   <header>yuvvideowidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

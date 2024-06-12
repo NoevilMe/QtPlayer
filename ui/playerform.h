@@ -6,6 +6,9 @@
 #include "audiospeaker.h"
 #include "av_def.h"
 #include "player/ffplayer.h"
+#include "util/iconhelper.h"
+
+#include <QScopedPointer>
 
 class QIODevice;
 
@@ -31,9 +34,9 @@ signals:
 private slots:
     void on_pushButtonList_toggled(bool checked);
     void on_pushButtonFullScreen_toggled(bool checked);
-    void playDoneSlot();
 
-    void slotTimerTimeOut();
+    void playDoneSlot();
+    void timerTimeoutSlot();
 
     // QWidget interface
 protected:
@@ -41,6 +44,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    void loadIcons();
     void clickPushButtonFullScreen();
     void listOutputAudioDevices();
 
@@ -52,12 +56,14 @@ private:
 private:
     Ui::PlayerForm *ui;
 
+    QScopedPointer<IconHelper> iconHelper;
+
     // fullscreen
     QWidget *fsWidget_ = nullptr;
     QWidget *fsParent_ = nullptr;
     Qt::WindowFlags fsFlags_;
 
-     QTimer *timerProgress; //定时器-获取当前视频时间
+    QTimer *timerProgress; // 定时器-获取当前视频时间
 
     std::unique_ptr<AudioSpeaker> speaker_;
 

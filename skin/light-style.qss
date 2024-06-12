@@ -188,10 +188,10 @@ background-color:red;
 QWidget#centralwidget QPushButton{
 background:transparent;
 border:none;
-max-width:30px;
-min-width:30px;
-max-height:30px;
-min-height:30px;
+max-width:24px;
+min-width:24px;
+max-height:24px;
+min-height:24px;
 }
 
 QWidget#centralwidget{
@@ -207,10 +207,10 @@ border:1px solid transparent;
 QWidget#centralwidget QPushButton#pushButtonPlay{
 background:transparent;
 border:none;
-max-width:40px;
-min-width:40px;
-max-height:40px;
-min-height:40px;
+max-width:32px;
+min-width:32px;
+max-height:32px;
+min-height:32px;
 image:url(:/images/Play.png);
 }
 
@@ -223,11 +223,11 @@ image:url(:/images/Pause.png);
 }
 
 QPushButton#pushButtonSlow{
-image:url(:/images/Rewind.png);
+image:url(:/images/Slow.png);
 }
 
 QPushButton#pushButtonFast{
-image:url(:/images/Forward.png);
+image:url(:/images/Fast.png);
 }
 
 QPushButton#pushButtonList{
