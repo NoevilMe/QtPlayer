@@ -16,7 +16,7 @@ QWK--WindowBar>QLabel#win-title-label {
     border: none;
     color: #ECECEC;
     background-color: transparent;
-    min-height: 28px;
+    min-height: 10px;
 }
 
 
@@ -24,7 +24,7 @@ QWK--WindowBar>QLabel#win-title-label {
 
 QWK--WindowBar>QAbstractButton[system-button=true] {
     qproperty-iconSize: 12px 12px;
-    min-width: 50px;
+    min-width: 36px;
     border: none;
     padding: 0;
     background-color: transparent;
@@ -75,7 +75,6 @@ QWK--WindowBar>QAbstractButton#icon-button {
     background-color: transparent;
 }
 
-
 /* Menu Bar */
 
 QMenuBar {
@@ -95,7 +94,7 @@ QMenuBar>QToolButton#qt_menubar_ext_button:pressed {
 QMenuBar::item {
     color: #EEEEEE;
     border: none;
-    padding: 8px 12px;
+    padding: 5px 6px;
 }
 
 QMenuBar::item:selected {
@@ -142,6 +141,7 @@ QMenu::separator {
 }
 
 
+
 /* Window */
 
 MainWindow {
@@ -159,30 +159,41 @@ QWidget#clock-widget {
     background-color: transparent;
 }
 
+/* progress slider */
 QSlider::Horizontal{
 background:transparent;
-min-height:20px;
-max-height:20px;
+min-height:12px;
+max-height:12px;
 }
+
+/* 未划过 */
 QSlider::add-page:Horizontal{
 background-color: gray;
 }
+/* 划过进度 */
 QSlider::sub-page:Horizontal {
 background-color:qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 rgb(255,0,255), stop:0.5 rgb(0,255,255), stop:1 rgb(255,255,0));
 }
+/* 槽 */
 QSlider::groove:Horizontal {
 background:transparent;
-height:5px;
+height:4px;
 }
+/* 滑块 */
 QSlider::handle:Horizontal {
 background-color:lightgreen;
-width:11px;
+/* background: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+    stop:0.6 #45ADED, stop:0.778409 rgba(255, 255, 255, 255)); */
+
+width:9px;
 margin: -3px 0px;
-border-radius:5px;
+border-radius:4px;
 }
 
 QSlider::handle:Horizontal:hover {
 background-color:red;
+/* background: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0.6 #2A8BDA,
+    stop:0.778409 rgba(255, 255, 255, 255)); */
 }
 
 QWidget#centralwidget QPushButton{
@@ -207,10 +218,10 @@ border:1px solid transparent;
 QWidget#centralwidget QPushButton#pushButtonPlay{
 background:transparent;
 border:none;
-max-width:32px;
-min-width:32px;
-max-height:32px;
-min-height:32px;
+max-width:24px;
+min-width:24px;
+max-height:24px;
+min-height:24px;
 image:url(:/images/Play.png);
 }
 

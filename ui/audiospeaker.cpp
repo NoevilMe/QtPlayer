@@ -72,8 +72,14 @@ double AudioSpeaker::AudioClock() {
     //     buffer_size_ = format_.sampleRate() * format_.bytesPerSample()
     //     *format_.channelCount();
     //     1秒数据量。如果不是这个长度，需要修改计算公式
-    return queued_clock_.load() -
-           double(buffer_size_ - audio_sink_->bytesFree()) / buffer_size_;
+    if (buffer_size_ <= 0) {
+        return 0;
+    } else if (!audio_sink_) {
+        return 0;
+    } else {
+        return queued_clock_.load() -
+               double(buffer_size_ - audio_sink_->bytesFree()) / buffer_size_;
+    }
 }
 
 void AudioSpeaker::run() {
