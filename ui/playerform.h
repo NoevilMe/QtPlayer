@@ -27,6 +27,7 @@ public:
 
     bool openMedia(MediaSource media);
     void playAudio(char *buf, int size, double clock);
+    void playVideo(AVFrame *frame);
 
 signals:
     void playDoneSignal();

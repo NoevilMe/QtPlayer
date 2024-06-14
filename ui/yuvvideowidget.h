@@ -1,19 +1,20 @@
 #ifndef YUVVIDEOWIDGET_H
 #define YUVVIDEOWIDGET_H
 
+#include <QList>
 #include <QOpenGLBuffer>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTexture>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
-#include <QFile>
-
+#include <QSharedPointer>
 
 /*
 QOpenGLExtraFunctions可以提供VAO相关函数
 */
 struct AVFrame;
+struct VideoFrame;
 
 class YuvVideoWidget : public QOpenGLWidget, protected QOpenGLExtraFunctions {
     Q_OBJECT
@@ -21,15 +22,17 @@ public:
     explicit YuvVideoWidget(QWidget *parent = nullptr);
     ~YuvVideoWidget();
 
-    void init(int width, int height);
-
-    void paintFrame(unsigned char *buf);
     void paintAVFrame(AVFrame *frame);
 
     void resetVideoSize(int width, int height);
 
-public slots:
-    void PlayOneFrame();
+    QList<int> supportedFormats() { return formats; }
+
+signals:
+    void playVideoSignal(const QSharedPointer<VideoFrame> &frame);
+
+private slots:
+    void playVideoSlot(const QSharedPointer<VideoFrame> &frame);
 
 protected:
     virtual void initializeGL();
@@ -45,34 +48,30 @@ private:
     void initTextures(); // 材质，Y,U,V
     void drawTextures();
 
-    void resetTextData();
+    void releaseVBO();
+    void releaseVAO();
 
 private:
-    int width_;
-    int height_;
+    QList<int> formats;
 
-    float videoRatio_= -1;
+    int videoWidth;
+    int videoHeight;
+    float videoRatio = -1;
 
-    QMatrix4x4 trans_;
+    QMatrix4x4 trans;
 
-    GLuint posVbo_;  // 顶点坐标VBO
-    GLuint textVbo_; // 纹理坐标VBO
-    GLuint vao_;
+    GLuint posVBO;  // 顶点坐标VBO
+    GLuint textVBO; // 纹理坐标VBO
+    GLuint vao;
 
-    GLuint textYUV_[3] = {0};    // 纹理对象ID（YUV各一个）
-    GLuint uniformYUV_[3] = {0}; // fragment shader中yuv变量地址
+    GLuint textYUV[3] = {0}; // 纹理对象ID（YUV各一个）
 
     QOpenGLShaderProgram *program; // 着色器程序容器
 
-    int pixFormat_;
-    unsigned char *textData_[3] = {0};
-
-    unsigned char *bufYuv420p_;
-    FILE *yuvFile_;
+    QSharedPointer<VideoFrame> videoFrame;
 
     //    QOpenGLVertexArrayObject vaoQuad;
     //    QOpenGLBuffer vboQuad;
-    //    QOpenGLShaderProgram *shaderProgram;
     //    QVector<GLfloat> vertexData;
 };
 

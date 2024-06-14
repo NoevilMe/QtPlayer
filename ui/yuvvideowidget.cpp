@@ -1,4 +1,5 @@
 #include "yuvvideowidget.h"
+#include "av_def.h"
 #include "util/util.h"
 
 #include <QTimer>
@@ -10,73 +11,58 @@ extern "C" {
 
 YuvVideoWidget::YuvVideoWidget(QWidget *parent)
     : QOpenGLWidget{parent},
-      width_(0),
-      height_(0),
-      posVbo_(0),
-      textVbo_(0),
-      vao_(0),
-      program(nullptr),
-      pixFormat_(AV_PIX_FMT_NONE),
-      bufYuv420p_(nullptr),
-      yuvFile_(nullptr) {}
+      formats{AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_NV12,
+              AV_PIX_FMT_NV21},
+      videoWidth(0),
+      videoHeight(0),
+      posVBO(0),
+      textVBO(0),
+      vao(0),
+      program(nullptr) {
 
-YuvVideoWidget::~YuvVideoWidget() { resetTextData(); }
-
-void YuvVideoWidget::resetTextData() {
-    if (textData_[0]) {
-        delete[] textData_[0];
-        textData_[0] = nullptr;
-    }
-
-    if (textData_[1]) {
-        delete[] textData_[1];
-        textData_[1] = nullptr;
-    }
-    if (textData_[2]) {
-        delete[] textData_[2];
-        textData_[2] = nullptr;
-    }
+    connect(this, &YuvVideoWidget::playVideoSignal, this,
+            &YuvVideoWidget::playVideoSlot);
 }
 
-void YuvVideoWidget::init(int width, int height) {
-    // 分配材质内存空间
-    textData_[0] = new unsigned char[width * height]; // Y
-    textData_[1] = new unsigned char[width * height / 2]; // U. NV12占用会大一些
-    textData_[2] = new unsigned char[width * height / 2]; // V
+YuvVideoWidget::~YuvVideoWidget() {
+    releaseVAO();
+    releaseVBO();
 
-    width_ = width;
-    height_ = height;
-
-    videoRatio_ = (float)width / height;
+    if (program) {
+        program->deleteLater();
+        delete program;
+        program = nullptr;
+    }
 }
 
 void YuvVideoWidget::resetVideoSize(int width, int height) {
-    if (width_ == width && height_ == height) {
+    if (videoWidth == width && videoHeight == height) {
         return;
     }
 
-    resetTextData();
+    videoWidth = width;
+    videoHeight = height;
 
-    // 分配材质内存空间
-    textData_[0] = new unsigned char[width * height]; // Y
-    textData_[1] = new unsigned char[width * height / 2]; // U，NV12会将UV放这里
-    textData_[2] = new unsigned char[width * height / 2]; // V
+    if (videoHeight == 0) {
+        videoHeight = 1;
+    }
 
-    width_ = width;
-    height_ = height;
-
-    videoRatio_ = (float)width / height;
+    videoRatio = (float)videoWidth / videoHeight;
 }
 
-void YuvVideoWidget::paintFrame(unsigned char *buf) {
-    if (!buf)
+void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
+    videoFrame = frame;
+
+    if (!videoFrame)
         return;
 
-    memcpy(textData_[0], buf, width_ * height_);
-    memcpy(textData_[1], buf + width_ * height_, width_ * height_ / 4);
-    memcpy(textData_[2], buf + width_ * height_ * 5 / 4, width_ * height_ / 4);
+    if (!formats.contains(videoFrame->pixfmt)) {
+        qDebug() << "unsupported frame " << videoFrame->pixfmt;
+        return;
+    }
 
-    // 刷新显示
+    resetVideoSize(frame->width, frame->height);
+
     update();
 }
 
@@ -84,120 +70,66 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
     if (!frame)
         return;
 
-    if ((AVPixelFormat)frame->format != AV_PIX_FMT_YUV420P &&
-        (AVPixelFormat)frame->format != AV_PIX_FMT_NV12 &&
-        (AVPixelFormat)frame->format != AV_PIX_FMT_YUVJ420P) {
+    if (!formats.contains(frame->format)) {
         qDebug() << "unsupported frame " << frame->format;
         return;
     }
 
-    // if (AV_PIX_FMT_YUVJ420P == frame->format) {
-    //     std::string filename =
-    //         std::to_string(util::TimeMilliseconds()) + ".yuv";
-    //     QFile file_(filename.data());
-    //     file_.open(QIODevice::WriteOnly);
-
-    //     // for (int i = 0; i < frame->height; i++) {
-    //     //     file_.write((char *)(frame->data[0] + i * frame->linesize[0]),
-    //     //                 frame->width);
-    //     // }
-
-    //     // for (int i = 0; i < frame->height / 2; i++) {
-    //     //     file_.write((char *)(frame->data[1] + i * frame->linesize[1]),
-    //     //                 frame->width);
-    //     // }
-
-    //     // file_.write((char *)frame->data[0], frame->linesize[0] *
-    //     frame->height);
-    //     // file_.write((char *)frame->data[1], frame->linesize[1] *
-    //     frame->height / 2);
-    //     // file_.write((char *)frame->data[2], frame->linesize[2] *
-    //     frame->height / 2);
-
-    //     // file_.write((char *)frame->data[0], frame->linesize[0] *
-    //     frame->height);
-    //     // file_.write((char *)frame->data[1], frame->linesize[1] *
-    //     frame->height / 2); file_.flush();
-    // }
-
     // https://blog.csdn.net/chinabinlang/article/details/7804808
-    resetVideoSize(frame->linesize[0], frame->height);
-    // resetVideoSize(frame->width, frame->height);
+    // resetVideoSize(frame->linesize[0], frame->height);
+    resetVideoSize(frame->width, frame->height);
 
-    // qDebug() << "width " << frame->width << ", height " << frame->height
-    //          << ", line size " << frame->linesize[0];
+    // qDebug() << "format" << frame->format << "width " << frame->width
+    //          << ", height " << frame->height << ", line size0 "
+    //          << frame->linesize[0] << ", line size1 " << frame->linesize[1];
 
-    pixFormat_ = frame->format;
-    if (AV_PIX_FMT_YUV420P == pixFormat_ || AV_PIX_FMT_YUVJ420P == pixFormat_) {
-        memcpy(textData_[0], frame->data[0],
-               frame->linesize[0] * frame->height);
-        memcpy(textData_[1], frame->data[1],
-               frame->linesize[1] * frame->height / 2);
-        memcpy(textData_[2], frame->data[2],
-               frame->linesize[2] * frame->height / 2);
-    } else if (AV_PIX_FMT_NV12 == pixFormat_) {
-        memcpy(textData_[0], frame->data[0],
-               frame->linesize[0] * frame->height);
-        memcpy(textData_[1], frame->data[1],
-               frame->linesize[1] * frame->height / 2);
+    videoFrame.reset(
+        new VideoFrame(frame->format, frame->width, frame->height));
+
+    if (AV_PIX_FMT_YUV420P == videoFrame->pixfmt ||
+        AV_PIX_FMT_YUVJ420P == videoFrame->pixfmt) {
+
+        for (int i = 0; i < frame->height; i++) {
+            memcpy(videoFrame->data[0] + i * frame->width,
+                   frame->data[0] + i * frame->linesize[0],
+                   frame->width); // 按行复制数据，末尾有对齐数据
+        }
+
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[1] + i * frame->width / 2,
+                   frame->data[1] + i * frame->linesize[1], frame->width / 2);
+        }
+
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[2] + i * frame->width / 2,
+                   frame->data[2] + i * frame->linesize[2], frame->width / 2);
+        }
+
+        // memcpy(textData_[0], frame->data[0],
+        //        frame->linesize[0] * frame->height);
+        // memcpy(textData_[1], frame->data[1],
+        //        frame->linesize[1] * frame->height / 2);
+        // memcpy(textData_[2], frame->data[2],
+        //        frame->linesize[2] * frame->height / 2);
+    } else if (AV_PIX_FMT_NV12 == videoFrame->pixfmt) {
+        for (int i = 0; i < frame->height; i++) {
+            memcpy(videoFrame->data[0] + i * frame->width,
+                   frame->data[0] + i * frame->linesize[0],
+                   frame->width); // 按行复制数据，末尾有对齐数据
+        }
+
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[1] + i * frame->width,
+                   frame->data[1] + i * frame->linesize[1],
+                   frame->width); // UV数据在一起
+        }
+
+        // memcpy(videoFrame->data[0], frame->data[0],
+        //        frame->linesize[0] * frame->height);
+        // memcpy(videoFrame->data[1], frame->data[1],
+        //        frame->linesize[1] * frame->height / 2);
     }
 
-    //    for (int i = 0; i < frame->height; i++) {
-    //        memcpy(textData_[0] + i * frame->width,
-    //               frame->data[0] + i * frame->linesize[0], frame->width);
-    //    }
-
-    //    for (int i = 0; i < frame->height / 2; i++) {
-    //        memcpy(textData_[1] + i * frame->width / 2,
-    //               frame->data[1] + i * frame->linesize[1], frame->width / 2);
-    //    }
-
-    //    for (int i = 0; i < frame->height / 2; i++) {
-    //        memcpy(textData_[2] + i * frame->width / 2,
-    //               frame->data[2] + i * frame->linesize[2], frame->width / 2);
-    //    }
-
-    update();
-}
-
-void YuvVideoWidget::PlayOneFrame() {
-    // 函数功能读取一张yuv图像数据进行显示，每进入一次，就显示一张图片
-    if (NULL == yuvFile_) {
-        // 打开yuv视频文件 注意修改文件路径
-        // 可以自行将fopen改为QFile中最新的文件操作接口
-        //        yuvFile_ = fopen("D:\\work\\yuv_1280x720_i420.yuv", "rb");
-        yuvFile_ = fopen("D:\\dev\\TestDemo\\yuv_1280x720_i420.yuv", "rb");
-    }
-
-    // 申请内存存一帧yuv图像数据，其大小为分辨率的1.5倍
-    int nLen = width_ * height_ * 3 / 2;
-    if (NULL == bufYuv420p_) {
-        bufYuv420p_ = new unsigned char[nLen];
-        qDebug("CPlayWidget::PlayOneFrame new data memory. Len=%d width=%d "
-               "height=%d\n",
-               nLen, width_, height_);
-    }
-
-    // 将一帧yuv图像读到内存中
-    if (NULL == yuvFile_) {
-        qFatal("read yuv file err.may be path is wrong!\n");
-        return;
-    }
-
-    // 读一帧数据
-    if (fread(bufYuv420p_, 1, nLen, yuvFile_) != nLen) {
-        // 关闭文件，并准备重新循环打开播放
-        fclose(yuvFile_);
-        yuvFile_ = NULL;
-    } else {
-        memcpy(textData_[0], bufYuv420p_, width_ * height_);
-        memcpy(textData_[1], bufYuv420p_ + width_ * height_,
-               width_ * height_ / 4);
-        memcpy(textData_[2], bufYuv420p_ + width_ * height_ * 5 / 4,
-               width_ * height_ / 4);
-    }
-
-    // 刷新界面,触发paintGL接口
     update();
 }
 
@@ -214,11 +146,6 @@ void YuvVideoWidget::initializeGL() {
     initTextures();
 
     glClearColor(0.0, 0.0, 0.0, 1.0);
-
-    // 打开本地文件、启动定时器
-    // QTimer *ti = new QTimer(this);
-    // connect(ti, SIGNAL(timeout()), this, SLOT(PlayOneFrame()));
-    // ti->start(40);
 }
 
 void YuvVideoWidget::resizeGL(int w, int h) {
@@ -231,168 +158,37 @@ void YuvVideoWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
 
     auto winRatio = (float)w / h;
-    trans_.setToIdentity();
-    if (winRatio > videoRatio_) {
-        trans_.scale(videoRatio_ / winRatio, 1.0f, 1.0f);
+    trans.setToIdentity();
+    if (winRatio > videoRatio) {
+        trans.scale(videoRatio / winRatio, 1.0f, 1.0f);
     } else {
-        // trans_.scale(1.0f, 1 - ((videoRatio_ - winRatio) / 2), 1.0f);
-        trans_.scale(1.0f, winRatio / videoRatio_, 1.0f);
+        trans.scale(1.0f, winRatio / videoRatio, 1.0f);
     }
-
-    //    qDebug() << "resizeGL " << w << " x " << h;
 }
 
 void YuvVideoWidget::paintGL() {
     //    qDebug() << "paintGL " << this->rect();
 
-    //#ifndef GL_SAMPLE
-    //    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    //    glClear(GL_COLOR_BUFFER_BIT);
+    if (!videoFrame)
+        return;
 
     program->bind();
-
-    //    QMatrix4x4 mat4; //默认是单位矩阵
-    //    mat4.scale(0.5); //缩放
-    //    // mat4.translate(0.3, 0.3, 0.0);
-    //    //    mat4.rotate(45.0f, QVector3D(0.0, 0.0, 1.0));
-    //    program->setUniformValue("trans", mat4);
-    program->setUniformValue("trans", trans_);
-    if (pixFormat_ >= 0) {
-        program->setUniformValue("pixFormat", pixFormat_);
+    program->setUniformValue("trans", trans);
+    if (videoFrame->pixfmt >= 0) {
+        program->setUniformValue("pixFormat", videoFrame->pixfmt);
     }
 
-    glBindVertexArray(vao_);
+    glBindVertexArray(vao);
     drawTextures();
 
     // GL_TRIANGLE_STRIP：有两种情况，
-    //（1）当前顶点序号n是偶数时，三角形三个顶点的顺序是(n - 2, n - 1, n )。
-    //（2）当前顶点序号n是奇数时，三角形三个顶点的顺序是(n - 1, n - 2, n)。
+    // （1）当前顶点序号n是偶数时，三角形三个顶点的顺序是(n - 2, n - 1, n )。
+    // （2）当前顶点序号n是奇数时，三角形三个顶点的顺序是(n - 1, n - 2, n)。
     //    这两种情况，保证了采用此种渲染方式的三角形顶点的卷绕顺序。
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     glBindVertexArray(0);
-
     program->release();
-}
-
-void YuvVideoWidget::initVBO() {
-    // 传递顶点和材质坐标
-    // 顶点
-    // OpenGL的顶点坐标是X和Y取值[-1,
-    // 1]。如果不到这个范围，则窗口的其他区域按比例显示为背景色？
-    // 所以调整这个坐标可以做到铺满窗口或者留空
-    //    static const GLfloat vert[] = {-0.5f, -0.5f, 0.5f, -0.5f,
-    //                                   -0.5f, 0.5f,  0.5f, 0.5f};
-    static const GLfloat vert[] = {-1.0f, -1.0f, 1.0f, -1.0f,
-                                   -1.0f, 1.0f,  1.0f, 1.0f};
-
-    // 纹理坐标
-    static const GLfloat text[] = {0.0f, 1.0f, 1.0f, 1.0f,
-                                   0.0f, 0.0f, 1.0f, 0.0f};
-    //    static const GLfloat text[] = {0.0f, 0.5f, 0.5f, 0.5f,
-    //                                   0.0f, 0.0f, 0.5f, 0.0f};
-
-    glGenBuffers(1, &posVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, posVbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vert), vert, GL_STATIC_DRAW);
-
-    glGenBuffers(1, &textVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, textVbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(text), text, GL_STATIC_DRAW);
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-}
-
-void YuvVideoWidget::initVAO() {
-    //     VAO创建
-    glGenVertexArrays(1, &vao_);
-    glBindVertexArray(vao_);
-
-    //绑定vbo ebo 加入属性描述信息
-    //.1 加入位置属性描述信息
-    glBindBuffer(GL_ARRAY_BUFFER, posVbo_);
-
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2,
-                          (void *)0);
-    glEnableVertexAttribArray(0);
-
-    //.2 加入材质属性描述数据
-    glBindBuffer(GL_ARRAY_BUFFER, textVbo_);
-
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2,
-                          (void *)0);
-    glEnableVertexAttribArray(1);
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    glBindVertexArray(0);
-}
-
-void YuvVideoWidget::initTextures() {
-    // Y,U,V各一个
-    glGenTextures(3, textYUV_);
-    for (int i = 0; i < 3; ++i) {
-        //--绑定纹理对象--
-        glBindTexture(GL_TEXTURE_2D, textYUV_[i]);
-        // 放大过滤，线性插值   GL_NEAREST(效率高，但马赛克严重)
-        // 设置纹理的过滤方式
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        // 设置纹理的包裹方式
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
-}
-
-void YuvVideoWidget::drawTextures() {
-    // 默认0-15 纹理单元可用
-    // qDebug() << "pix fmt " << pixFormat_;
-
-    if (pixFormat_ == AV_PIX_FMT_YUV420P) {
-
-        // 加载y数据纹理
-        // 激活纹理单元GL_TEXTURE0
-        glActiveTexture(GL_TEXTURE0);
-
-        // 使用来自y数据生成纹理
-        glBindTexture(GL_TEXTURE_2D, textYUV_[0]);
-
-        // 使用内存中m_pBufYuv420p数据创建真正的y数据纹理
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width_, height_, 0,
-                     GL_LUMINANCE, GL_UNSIGNED_BYTE, textData_[0]);
-
-        // 加载u数据纹理
-        glActiveTexture(GL_TEXTURE1); // 激活纹理单元GL_TEXTURE1
-        glBindTexture(GL_TEXTURE_2D, textYUV_[1]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width_ / 2, height_ / 2, 0,
-                     GL_LUMINANCE, GL_UNSIGNED_BYTE, (char *)textData_[1]);
-
-        // 加载v数据纹理
-        glActiveTexture(GL_TEXTURE2); // 激活纹理单元GL_TEXTURE2
-        glBindTexture(GL_TEXTURE_2D, textYUV_[2]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width_ / 2, height_ / 2, 0,
-                     GL_LUMINANCE, GL_UNSIGNED_BYTE, (char *)textData_[2]);
-    } else if (pixFormat_ == AV_PIX_FMT_NV12) {
-        // glUniform1i(uniformFmt, pixFormat_);
-
-        // 加载y数据纹理
-        // 激活纹理单元GL_TEXTURE0
-        glActiveTexture(GL_TEXTURE0);
-
-        // 使用来自y数据生成纹理
-        glBindTexture(GL_TEXTURE_2D, textYUV_[0]);
-
-        // 使用内存中m_pBufYuv420p数据创建真正的y数据纹理
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width_, height_, 0,
-                     GL_LUMINANCE, GL_UNSIGNED_BYTE, textData_[0]);
-
-        // 加载u数据纹理
-        glActiveTexture(GL_TEXTURE1); // 激活纹理单元GL_TEXTURE1
-        glBindTexture(GL_TEXTURE_2D, textYUV_[1]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, width_ / 2,
-                     height_ / 2, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE,
-                     (char *)textData_[1]);
-    }
 }
 
 void YuvVideoWidget::initShader() {
@@ -402,6 +198,7 @@ void YuvVideoWidget::initShader() {
     // https://blog.csdn.net/zhangpengzp/article/details/89532590
 
     // 顶点着色器源码
+    // 为了设置顶点着色器的输出，我们必须把位置数据赋值给预定义的gl_Position变量
     const char *vsrc = R"(#version 330 core
         layout(location = 0) in vec4 vertexIn;
         layout(location = 1) in vec2 textureIn;
@@ -411,10 +208,10 @@ void YuvVideoWidget::initShader() {
         uniform mat4 trans = mat4(1.0);
 
         void main(void)
-    {
+        {
             gl_Position = trans * vertexIn;
             texturePos = textureIn;
-    })";
+        })";
 
     // 片段着色器源码
     const char *fsrc = R"(#version 330 core
@@ -430,6 +227,8 @@ void YuvVideoWidget::initShader() {
             if(pixFormat==0) // AV_PIX_FMT_YUV420P
             {
                 yuv.r = texture2D(yTexture, texturePos).r;
+                // shader 会将数据归一化，而 uv 的取值区间本身存在-128到正128 然后归一化到0-1 为了正确计算成rgb，
+                // 则需要归一化到 -0.5 - 0.5的区间
                 yuv.g = texture2D(uTexture, texturePos).r - 0.5;
                 yuv.b = texture2D(vTexture, texturePos).r - 0.5;
             }else if(pixFormat==12) //AV_PIX_FMT_YUVJ420P
@@ -440,16 +239,12 @@ void YuvVideoWidget::initShader() {
             }else if(pixFormat==23) //AV_PIX_FMT_NV12
             {
                 yuv.r = texture2D(yTexture, texturePos).r;
-                yuv.g = texture2D(uTexture, texturePos).r - 0.5 ;
-                // shader 会将数据归一化，而 uv 的取值区间本身存在-128到正128 然后归一化到0-1 为了正确计算成rgb，
-                // 则需要归一化到 -0.5 - 0.5的区间
+                yuv.g = texture2D(uTexture, texturePos).r - 0.5;
                 yuv.b = texture2D(uTexture, texturePos).a - 0.5;
             }else if(pixFormat==24)//AV_PIX_FMT_NV21
             {
                 yuv.r = texture2D(yTexture, texturePos).r;
-                yuv.g = texture2D(uTexture, texturePos).a - 0.5 ;
-                // shader 会将数据归一化，而 uv 的取值区间本身存在-128到正128 然后归一化到0-1 为了正确计算成rgb，
-                // 则需要归一化到 -0.5 - 0.5的区间
+                yuv.g = texture2D(uTexture, texturePos).a - 0.5;
                 yuv.b = texture2D(uTexture, texturePos).r - 0.5;
             }
 
@@ -476,17 +271,175 @@ void YuvVideoWidget::initShader() {
     program->link();
     program->bind();
 
+#if 0
     // 从shader获取材质
-    uniformYUV_[0] = program->uniformLocation("yTexture");
-    uniformYUV_[1] = program->uniformLocation("uTexture");
-    uniformYUV_[2] = program->uniformLocation("vTexture");
+    GLuint uniformYUV[3] = {0}; // fragment shader中yuv变量地址
+    uniformYUV[0] = program->uniformLocation("yTexture");
+    uniformYUV[1] = program->uniformLocation("uTexture");
+    uniformYUV[2] = program->uniformLocation("vTexture");
 
     // 指定y纹理要使用新值
     // 只能用0,1,2等表示纹理单元的索引，这是opengl不人性化的地方
     // 0对应纹理单元GL_TEXTURE0 1对应纹理单元GL_TEXTURE1 2对应纹理的单元
-    glUniform1i(uniformYUV_[0], 0);
+    glUniform1i(uniformYUV[0], 0);
     // 指定u纹理要使用新值
-    glUniform1i(uniformYUV_[1], 1);
+    glUniform1i(uniformYUV[1], 1);
     // 指定v纹理要使用新值
-    glUniform1i(uniformYUV_[2], 2);
+    glUniform1i(uniformYUV[2], 2);
+#else
+    // 直接用Qt包装类
+    program->setUniformValue("yTexture", 0);
+    program->setUniformValue("uTexture", 1);
+    program->setUniformValue("vTexture", 2);
+#endif
+
+    program->release();
+}
+
+void YuvVideoWidget::initVBO() {
+    // 传递顶点和材质坐标
+    // 顶点
+    // OpenGL的顶点坐标是X和Y取值[-1,
+    // 1]。如果不到这个范围，则窗口的其他区域按比例显示为背景色？
+    // 所以调整这个坐标可以做到铺满窗口或者留空
+    //    static const GLfloat vert[] = {-0.5f, -0.5f, 0.5f, -0.5f,
+    //                                   -0.5f, 0.5f,  0.5f, 0.5f};
+    static const GLfloat vert[] = {-1.0f, -1.0f, 1.0f, -1.0f,
+                                   -1.0f, 1.0f,  1.0f, 1.0f};
+
+    // 纹理坐标
+    static const GLfloat text[] = {0.0f, 1.0f, 1.0f, 1.0f,
+                                   0.0f, 0.0f, 1.0f, 0.0f};
+    //    static const GLfloat text[] = {0.0f, 0.5f, 0.5f, 0.5f,
+    //                                   0.0f, 0.0f, 0.5f, 0.0f};
+
+    /*
+     GL_ARRAY_BUFFER：用于存储顶点数组数据，如顶点位置、颜色、纹理坐标等，并通过glVertexAttribPointer()函数关联到特定的顶点属性。
+     https://learnopengl-cn.github.io/01%20Getting%20started/04%20Hello%20Triangle/
+     */
+
+    glGenBuffers(1, &posVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, posVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vert), vert, GL_STATIC_DRAW);
+
+    glGenBuffers(1, &textVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, textVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(text), text, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void YuvVideoWidget::initVAO() {
+    //     VAO创建
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
+    // 绑定vbo ebo 加入属性描述信息
+    //.1 加入位置属性描述信息
+    glBindBuffer(GL_ARRAY_BUFFER, posVBO);
+    // glVertexAttribPointer函数告诉OpenGL该如何解析顶点数据
+    // 第一个参数指定我们要配置的顶点属性。与layout(location = 0)对应
+    // 第二个参数指定顶点属性的大小。顶点属性是一个vec3，它由2个值组成，所以大小是2。
+    // 第三个参数指定数据的类型，这里是GL_FLOAT(GLSL中vec*都是由浮点数值组成的)。
+    // 第四个参数定义我们是否希望数据被标准化(Normalize)。如果我们设置为GL_TRUE，所有数据都会被映射到0（对于有符号型signed数据是-1）到1之间。我们把它设置为GL_FALSE。
+    // 第五个参数叫做步长(Stride)，它告诉我们在连续的顶点属性组之间的间隔。
+    // 由于下个组位置数据在2个float之后，我们把步长设置为2 * sizeof(float)。
+    // 要注意的是由于我们知道这个数组是紧密排列的（在两个顶点属性之间没有空隙）我们也可以设置为0来让OpenGL决定具体步长是多少（只有当数值是紧密排列时才可用）。一旦我们有更多的顶点属性，我们就必须更小心地定义每个顶点属性之间的间隔，我们在后面会看到更多的例子（译注:
+    // 这个参数的意思简单说就是从这个属性第二次出现的地方到整个数组0位置之间有多少字节）。
+    // 最后一个参数的类型是void*，所以需要我们进行这个奇怪的强制类型转换。它表示位置数据在缓冲中起始位置的偏移量(Offset)。由于位置数据在数组的开头，所以这里是0。我们会在后面详细解释这个参数。
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2,
+                          (void *)0);
+    glEnableVertexAttribArray(0);
+
+    //.2 加入材质属性描述数据
+    glBindBuffer(GL_ARRAY_BUFFER, textVBO);
+
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2,
+                          (void *)0);
+    glEnableVertexAttribArray(1);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glBindVertexArray(0);
+}
+
+void YuvVideoWidget::releaseVBO() {
+    glDeleteBuffers(1, &posVBO);
+    glDeleteBuffers(1, &textVBO);
+}
+
+void YuvVideoWidget::releaseVAO() { glDeleteVertexArrays(1, &vao); }
+
+void YuvVideoWidget::initTextures() {
+    // Y,U,V各一个
+    glGenTextures(3, textYUV);
+    for (int i = 0; i < 3; ++i) {
+        //--绑定纹理对象--
+        glBindTexture(GL_TEXTURE_2D, textYUV[i]);
+        // 放大过滤，线性插值   GL_NEAREST(效率高，但马赛克严重)
+        // 设置纹理的过滤方式
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        // 设置纹理的包裹方式
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+}
+
+void YuvVideoWidget::drawTextures() {
+    // 默认0-15 纹理单元可用
+    // qDebug() << "pix fmt " << pixFormat_;
+    QSharedPointer<VideoFrame> curFrame = videoFrame;
+    if (!curFrame)
+        return;
+
+    if (curFrame->pixfmt == AV_PIX_FMT_YUV420P) {
+
+        // 加载y数据纹理
+        // 激活纹理单元GL_TEXTURE0
+        glActiveTexture(GL_TEXTURE0);
+
+        // 使用来自y数据生成纹理
+        glBindTexture(GL_TEXTURE_2D, textYUV[0]);
+
+        // 使用内存中m_pBufYuv420p数据创建真正的y数据纹理
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, curFrame->width,
+                     curFrame->height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                     curFrame->data[0]);
+
+        // 加载u数据纹理
+        glActiveTexture(GL_TEXTURE1); // 激活纹理单元GL_TEXTURE1
+        glBindTexture(GL_TEXTURE_2D, textYUV[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, curFrame->width / 2,
+                     curFrame->height / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                     (char *)curFrame->data[1]);
+
+        // 加载v数据纹理
+        glActiveTexture(GL_TEXTURE2); // 激活纹理单元GL_TEXTURE2
+        glBindTexture(GL_TEXTURE_2D, textYUV[2]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, curFrame->width / 2,
+                     curFrame->height / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                     (char *)curFrame->data[2]);
+    } else if (curFrame->pixfmt == AV_PIX_FMT_NV12) {
+        // glUniform1i(uniformFmt, pixFormat_);
+
+        // 加载y数据纹理
+        // 激活纹理单元GL_TEXTURE0
+        glActiveTexture(GL_TEXTURE0);
+
+        // 使用来自y数据生成纹理
+        glBindTexture(GL_TEXTURE_2D, textYUV[0]);
+
+        // 使用内存中m_pBufYuv420p数据创建真正的y数据纹理
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, curFrame->width,
+                     curFrame->height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                     curFrame->data[0]);
+
+        // 加载u数据纹理
+        glActiveTexture(GL_TEXTURE1); // 激活纹理单元GL_TEXTURE1
+        glBindTexture(GL_TEXTURE_2D, textYUV[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, curFrame->width / 2,
+                     curFrame->height / 2, 0, GL_LUMINANCE_ALPHA,
+                     GL_UNSIGNED_BYTE, (char *)curFrame->data[1]);
+    }
 }

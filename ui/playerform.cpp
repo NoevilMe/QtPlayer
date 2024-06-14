@@ -98,6 +98,97 @@ void PlayerForm::playAudio(char *buf, int size, double clock) {
     speaker_->write(buf, size, clock);
 }
 
+void PlayerForm::playVideo(AVFrame *frame) {
+    // // 分配材质内存空间
+    // textData_[0] = new unsigned char[width * height]; // Y
+    // textData_[1] = new unsigned char[width * height / 2]; // U.
+    // NV12占用会大一些 textData_[2] = new unsigned char[width * height / 2]; //
+    // V
+
+    // width_ = width;
+    // height_ = height;
+
+    /*
+    if ((AVPixelFormat)frame->format != AV_PIX_FMT_YUV420P &&
+        (AVPixelFormat)frame->format != AV_PIX_FMT_NV12 &&
+        (AVPixelFormat)frame->format != AV_PIX_FMT_YUVJ420P) {
+        qDebug() << "unsupported frame " << frame->format;
+        return;
+    }
+
+           // if (AV_PIX_FMT_YUVJ420P == frame->format) {
+           //     std::string filename =
+           //         std::to_string(util::TimeMilliseconds()) + ".yuv";
+           //     QFile file_(filename.data());
+           //     file_.open(QIODevice::WriteOnly);
+
+           //     // for (int i = 0; i < frame->height; i++) {
+           //     //     file_.write((char *)(frame->data[0] + i *
+    frame->linesize[0]),
+           //     //                 frame->width);
+           //     // }
+
+           //     // for (int i = 0; i < frame->height / 2; i++) {
+           //     //     file_.write((char *)(frame->data[1] + i *
+    frame->linesize[1]),
+           //     //                 frame->width);
+           //     // }
+
+           //     // file_.write((char *)frame->data[0], frame->linesize[0] *
+           //     frame->height);
+           //     // file_.write((char *)frame->data[1], frame->linesize[1] *
+           //     frame->height / 2);
+           //     // file_.write((char *)frame->data[2], frame->linesize[2] *
+           //     frame->height / 2);
+
+           //     // file_.write((char *)frame->data[0], frame->linesize[0] *
+           //     frame->height);
+           //     // file_.write((char *)frame->data[1], frame->linesize[1] *
+           //     frame->height / 2); file_.flush();
+           // }
+
+           // https://blog.csdn.net/chinabinlang/article/details/7804808
+    resetVideoSize(frame->linesize[0], frame->height);
+    // resetVideoSize(frame->width, frame->height);
+
+           // qDebug() << "width " << frame->width << ", height " <<
+    frame->height
+           //          << ", line size " << frame->linesize[0];
+
+    pixFormat_ = frame->format;
+    if (AV_PIX_FMT_YUV420P == pixFormat_ || AV_PIX_FMT_YUVJ420P == pixFormat_) {
+        memcpy(textData_[0], frame->data[0],
+               frame->linesize[0] * frame->height);
+        memcpy(textData_[1], frame->data[1],
+               frame->linesize[1] * frame->height / 2);
+        memcpy(textData_[2], frame->data[2],
+               frame->linesize[2] * frame->height / 2);
+    } else if (AV_PIX_FMT_NV12 == pixFormat_) {
+        memcpy(textData_[0], frame->data[0],
+               frame->linesize[0] * frame->height);
+        memcpy(textData_[1], frame->data[1],
+               frame->linesize[1] * frame->height / 2);
+    }
+
+           //    for (int i = 0; i < frame->height; i++) {
+           //        memcpy(textData_[0] + i * frame->width,
+           //               frame->data[0] + i * frame->linesize[0],
+    frame->width);
+           //    }
+
+           //    for (int i = 0; i < frame->height / 2; i++) {
+           //        memcpy(textData_[1] + i * frame->width / 2,
+           //               frame->data[1] + i * frame->linesize[1],
+    frame->width / 2);
+           //    }
+
+           //    for (int i = 0; i < frame->height / 2; i++) {
+           //        memcpy(textData_[2] + i * frame->width / 2,
+           //               frame->data[2] + i * frame->linesize[2],
+    frame->width / 2);
+           //    } */
+}
+
 void PlayerForm::clickPushButtonFullScreen() {
     // 对pushButton实现模拟点击
     // 定义左键点击事件，Qt::NoModifier代表无其他修饰键被按下
@@ -256,14 +347,15 @@ void PlayerForm::loadIcons() {
     iconHelper.reset(new IconHelper(":/font/fa-regular-400.ttf",
                                     "Font Awesome 6 Pro Regular"));
 
-    // QImage img = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600, 600).toImage();
-     QPixmap pix1 = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600, 600);
+    // QImage img = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600,
+    // 600).toImage();
+    QPixmap pix1 = iconHelper->getPixmap1("#F08784", 0x25b6, 600, 600, 600);
     // img.save("play.png");
-     QPixmap pix2 = iconHelper->getPixmap1("#308704", 0x25b6, 600, 600, 600);
+    QPixmap pix2 = iconHelper->getPixmap1("#308704", 0x25b6, 600, 600, 600);
 
-     QIcon icon;
-     icon.addPixmap(pix1, QIcon::Active);
-     icon.addPixmap(pix2, QIcon::Normal);
+    QIcon icon;
+    icon.addPixmap(pix1, QIcon::Active);
+    icon.addPixmap(pix2, QIcon::Normal);
 
     ui->pushButtonPlay->setIcon(icon);
     ui->pushButtonPlay->setIconSize(QSize(42, 42));
