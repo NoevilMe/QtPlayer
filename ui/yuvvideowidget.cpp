@@ -2,6 +2,7 @@
 #include "av_def.h"
 #include "util/util.h"
 
+#include <QThread>
 #include <QTimer>
 
 extern "C" {
@@ -20,6 +21,7 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
       vao(0),
       program(nullptr) {
 
+    // 使用信号槽跨线程传递
     connect(this, &YuvVideoWidget::playVideoSignal, this,
             &YuvVideoWidget::playVideoSlot);
 }
@@ -27,6 +29,7 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
 YuvVideoWidget::~YuvVideoWidget() {
     releaseVAO();
     releaseVBO();
+    releaseTextures();
 
     if (program) {
         program->deleteLater();
@@ -50,7 +53,12 @@ void YuvVideoWidget::resetVideoSize(int width, int height) {
     videoRatio = (float)videoWidth / videoHeight;
 }
 
+bool YuvVideoWidget::isSupportedFormat(int fmt) {
+    return formats.contains(fmt);
+}
+
 void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
+    // qDebug()<< QThread::currentThreadId() <<"playVideoSlot";
     videoFrame = frame;
 
     if (!videoFrame)
@@ -336,10 +344,10 @@ void YuvVideoWidget::initVAO() {
 
     // 绑定vbo ebo 加入属性描述信息
     //.1 加入位置属性描述信息
-    glBindBuffer(GL_ARRAY_BUFFER, posVBO);
     // glVertexAttribPointer函数告诉OpenGL该如何解析顶点数据
+    glBindBuffer(GL_ARRAY_BUFFER, posVBO);
     // 第一个参数指定我们要配置的顶点属性。与layout(location = 0)对应
-    // 第二个参数指定顶点属性的大小。顶点属性是一个vec3，它由2个值组成，所以大小是2。
+    // 第二个参数指定顶点属性的大小。顶点属性是一个vec4，但是我们提供的数据由2个值组成，所以大小是2。
     // 第三个参数指定数据的类型，这里是GL_FLOAT(GLSL中vec*都是由浮点数值组成的)。
     // 第四个参数定义我们是否希望数据被标准化(Normalize)。如果我们设置为GL_TRUE，所有数据都会被映射到0（对于有符号型signed数据是-1）到1之间。我们把它设置为GL_FALSE。
     // 第五个参数叫做步长(Stride)，它告诉我们在连续的顶点属性组之间的间隔。
@@ -369,6 +377,8 @@ void YuvVideoWidget::releaseVBO() {
 }
 
 void YuvVideoWidget::releaseVAO() { glDeleteVertexArrays(1, &vao); }
+
+void YuvVideoWidget::releaseTextures() { glDeleteTextures(3, textYUV); }
 
 void YuvVideoWidget::initTextures() {
     // Y,U,V各一个

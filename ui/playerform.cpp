@@ -75,9 +75,9 @@ bool PlayerForm::openMedia(MediaSource media) {
         speaker_->start();
     }
 
-    player_->SetVideoFrameCallback(std::bind(&YuvVideoWidget::paintAVFrame,
-                                             ui->openGLWidget,
-                                             std::placeholders::_1));
+    player_->SetVideoFrameCallback(
+        std::bind(&PlayerForm::playVideo, this, std::placeholders::_1));
+
     player_->SetPlayDoneCallback([=]() {
         // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
         emit this->playDoneSignal();
@@ -99,94 +99,48 @@ void PlayerForm::playAudio(char *buf, int size, double clock) {
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {
-    // // 分配材质内存空间
-    // textData_[0] = new unsigned char[width * height]; // Y
-    // textData_[1] = new unsigned char[width * height / 2]; // U.
-    // NV12占用会大一些 textData_[2] = new unsigned char[width * height / 2]; //
-    // V
-
-    // width_ = width;
-    // height_ = height;
-
-    /*
-    if ((AVPixelFormat)frame->format != AV_PIX_FMT_YUV420P &&
-        (AVPixelFormat)frame->format != AV_PIX_FMT_NV12 &&
-        (AVPixelFormat)frame->format != AV_PIX_FMT_YUVJ420P) {
-        qDebug() << "unsupported frame " << frame->format;
+    if (!ui->openGLWidget->isSupportedFormat(frame->format)) {
         return;
     }
 
-           // if (AV_PIX_FMT_YUVJ420P == frame->format) {
-           //     std::string filename =
-           //         std::to_string(util::TimeMilliseconds()) + ".yuv";
-           //     QFile file_(filename.data());
-           //     file_.open(QIODevice::WriteOnly);
+    QSharedPointer<VideoFrame> videoFrame(
+        new VideoFrame(frame->format, frame->width, frame->height));
 
-           //     // for (int i = 0; i < frame->height; i++) {
-           //     //     file_.write((char *)(frame->data[0] + i *
-    frame->linesize[0]),
-           //     //                 frame->width);
-           //     // }
+    if (AV_PIX_FMT_YUV420P == videoFrame->pixfmt ||
+        AV_PIX_FMT_YUVJ420P == videoFrame->pixfmt) {
 
-           //     // for (int i = 0; i < frame->height / 2; i++) {
-           //     //     file_.write((char *)(frame->data[1] + i *
-    frame->linesize[1]),
-           //     //                 frame->width);
-           //     // }
+        for (int i = 0; i < frame->height; i++) {
+            memcpy(videoFrame->data[0] + i * frame->width,
+                   frame->data[0] + i * frame->linesize[0],
+                   frame->width); // 按行复制数据，末尾有对齐数据
+        }
 
-           //     // file_.write((char *)frame->data[0], frame->linesize[0] *
-           //     frame->height);
-           //     // file_.write((char *)frame->data[1], frame->linesize[1] *
-           //     frame->height / 2);
-           //     // file_.write((char *)frame->data[2], frame->linesize[2] *
-           //     frame->height / 2);
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[1] + i * frame->width / 2,
+                   frame->data[1] + i * frame->linesize[1], frame->width / 2);
+        }
 
-           //     // file_.write((char *)frame->data[0], frame->linesize[0] *
-           //     frame->height);
-           //     // file_.write((char *)frame->data[1], frame->linesize[1] *
-           //     frame->height / 2); file_.flush();
-           // }
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[2] + i * frame->width / 2,
+                   frame->data[2] + i * frame->linesize[2], frame->width / 2);
+        }
 
-           // https://blog.csdn.net/chinabinlang/article/details/7804808
-    resetVideoSize(frame->linesize[0], frame->height);
-    // resetVideoSize(frame->width, frame->height);
+    } else if (AV_PIX_FMT_NV12 == videoFrame->pixfmt) {
+        for (int i = 0; i < frame->height; i++) {
+            memcpy(videoFrame->data[0] + i * frame->width,
+                   frame->data[0] + i * frame->linesize[0],
+                   frame->width); // 按行复制数据，末尾有对齐数据
+        }
 
-           // qDebug() << "width " << frame->width << ", height " <<
-    frame->height
-           //          << ", line size " << frame->linesize[0];
-
-    pixFormat_ = frame->format;
-    if (AV_PIX_FMT_YUV420P == pixFormat_ || AV_PIX_FMT_YUVJ420P == pixFormat_) {
-        memcpy(textData_[0], frame->data[0],
-               frame->linesize[0] * frame->height);
-        memcpy(textData_[1], frame->data[1],
-               frame->linesize[1] * frame->height / 2);
-        memcpy(textData_[2], frame->data[2],
-               frame->linesize[2] * frame->height / 2);
-    } else if (AV_PIX_FMT_NV12 == pixFormat_) {
-        memcpy(textData_[0], frame->data[0],
-               frame->linesize[0] * frame->height);
-        memcpy(textData_[1], frame->data[1],
-               frame->linesize[1] * frame->height / 2);
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[1] + i * frame->width,
+                   frame->data[1] + i * frame->linesize[1],
+                   frame->width); // UV数据在一起
+        }
     }
 
-           //    for (int i = 0; i < frame->height; i++) {
-           //        memcpy(textData_[0] + i * frame->width,
-           //               frame->data[0] + i * frame->linesize[0],
-    frame->width);
-           //    }
-
-           //    for (int i = 0; i < frame->height / 2; i++) {
-           //        memcpy(textData_[1] + i * frame->width / 2,
-           //               frame->data[1] + i * frame->linesize[1],
-    frame->width / 2);
-           //    }
-
-           //    for (int i = 0; i < frame->height / 2; i++) {
-           //        memcpy(textData_[2] + i * frame->width / 2,
-           //               frame->data[2] + i * frame->linesize[2],
-    frame->width / 2);
-           //    } */
+    // qDebug() << QThread::currentThreadId() << "playVideo";
+    emit ui->openGLWidget->playVideoSignal(videoFrame);
 }
 
 void PlayerForm::clickPushButtonFullScreen() {

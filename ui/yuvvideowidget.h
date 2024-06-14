@@ -27,6 +27,7 @@ public:
     void resetVideoSize(int width, int height);
 
     QList<int> supportedFormats() { return formats; }
+    bool isSupportedFormat(int fmt);
 
 signals:
     void playVideoSignal(const QSharedPointer<VideoFrame> &frame);
@@ -50,6 +51,7 @@ private:
 
     void releaseVBO();
     void releaseVAO();
+    void releaseTextures();
 
 private:
     QList<int> formats;
