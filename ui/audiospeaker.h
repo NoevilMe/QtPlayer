@@ -4,17 +4,17 @@
 #include <QAudioSink>
 #include <QMutex>
 #include <QQueue>
-#include <QThread>
 #include <QWaitCondition>
 
 #include <atomic>
 
-class AudioSpeaker : public QThread {
+class AudioSpeaker : public QObject {
     Q_OBJECT
 public:
-    explicit AudioSpeaker(QObject *parent = nullptr);
+    explicit AudioSpeaker();
     ~AudioSpeaker();
 
+    void Start();
     void Stop();
     void Pause();
     void Resume();
@@ -23,16 +23,19 @@ public:
     QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
 
     // 内部释放data
-    void write(const char *data, int len, double clock);
+
     double AudioClock();
+    int bytesFree();
 
 signals:
     void pauseSignal();
     void resumeSignal();
+    void write(const char *data, int len, double clock);
 
 private slots:
     void pauseSlot();
     void resumeSlot();
+    void writeSlot(const char *data, int len, double clock);
 
     // QThread interface
 protected:
@@ -41,8 +44,6 @@ protected:
         int length;
         double clock;
     };
-
-    void run() override;
 
     void handleStateChanged(QAudio::State newState);
     void readyRead();
@@ -55,10 +56,6 @@ private:
     long long buffer_size_;
 
     std::atomic<double> queued_clock_;
-
-    QQueue<AudioSpeakerFrame> queue_;
-    QMutex mutex_;
-    QWaitCondition cond_;
 
     QScopedPointer<QAudioSink> audio_sink_;
     QIODevice *audio_device_ = nullptr;

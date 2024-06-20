@@ -26,6 +26,8 @@ PlayerForm::PlayerForm(QWidget *parent)
 
     //    listOutputAudioDevices();
     connect(this, &PlayerForm::playDoneSignal, this, &PlayerForm::playDoneSlot);
+
+    qDebug() << "PlayerForm" << QThread::currentThreadId();
 }
 
 PlayerForm::~PlayerForm() {
@@ -73,7 +75,8 @@ bool PlayerForm::openMedia(MediaSource media) {
                       std::placeholders::_2, std::placeholders::_3));
         player_->SetAudioClockCallback(
             [=]() { return speaker_->AudioClock(); });
-        speaker_->start();
+        speaker_->Start();
+        qDebug() << "speaker" << QThread::currentThreadId();
     }
 
     player_->SetVideoFrameCallback(
@@ -97,6 +100,10 @@ bool PlayerForm::openMedia(MediaSource media) {
 }
 
 void PlayerForm::playAudio(char *buf, int size, double clock) {
+    while (speaker_->bytesFree() < size) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
     speaker_->write(buf, size, clock);
 }
 
@@ -209,7 +216,6 @@ void PlayerForm::stopSpeaker() {
     if (speaker_) {
         qDebug() << "reset speaker ...";
         speaker_->Stop();
-        speaker_->wait();
         speaker_.reset();
     }
 }
