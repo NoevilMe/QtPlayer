@@ -40,6 +40,8 @@ private slots:
     void timerTimeoutSlot();
 
     // QWidget interface
+    void on_pushButtonPlay_clicked(bool checked);
+
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void closeEvent(QCloseEvent *event) override;

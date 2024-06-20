@@ -1,15 +1,9 @@
 #include "ffplayer.h"
-
-#include <fstream>
-
 #include "av_util.h"
 
 extern "C" {
-// #include <libavcodec/avcodec.h>
-// #include <libavdevice/avdevice.h>
-// #include <libavformat/avformat.h>
-// #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
+// #include <libavutil/imgutils.h>
 // #include <libavutil/timestamp.h>
 };
 
@@ -62,11 +56,12 @@ const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
     return hwconfig;
 }
 
-FFPlayer::FFPlayer() : hwtype_(avutil::GetDefaultHWDeviceType()) {
+FFPlayer::FFPlayer()
+    : hwtype_(avutil::GetDefaultHWDeviceType()),
+      running_(false),
+      paused_(false) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
-
-    // avutil::GetAllDevices();
 }
 
 FFPlayer::~FFPlayer() {
@@ -135,6 +130,14 @@ double FFPlayer::GetClock() {
 void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
+    if (paused_.load()) {
+        std::lock_guard<std::mutex> lock(paused_mutex_);
+        paused_.store(false);
+        paused_cv_.notify_all();
+        logger_->info("resume playing");
+        return true;
+    }
+
     if (running_.load()) {
         return true;
     }
@@ -201,6 +204,12 @@ bool FFPlayer::Play() {
     //     }
     // }
 
+    return true;
+}
+
+bool FFPlayer::Pause() {
+    paused_.store(true);
+    logger_->info("pause required");
     return true;
 }
 
@@ -543,6 +552,9 @@ void FFPlayer::Release() {
 
     video_player_.reset();
     audio_player_.reset();
+
+    paused_.store(false);
+    running_.store(false);
 }
 
 void FFPlayer::ResetInputContext() {
@@ -656,6 +668,12 @@ void FFPlayer::ReadThreadFunc() {
     try {
         int err = 0;
         while (running_.load()) {
+            if (paused_.load()) {
+                logger_->info("read thread paused");
+                std::unique_lock<std::mutex> lock(paused_mutex_);
+                paused_cv_.wait(lock, [&]() { return !paused_.load(); });
+                logger_->info("read thread resume");
+            }
 
             if (video_queue_.size() > VIDEO_PACKET_MAX_SIZE ||
                 audio_queue_.size() > AUDIO_PACKET_MAX_SIZE) {
@@ -728,8 +746,14 @@ void FFPlayer::VideoThreadFunc() {
     logger_->info("VideoThreadFunc running ...");
 
     try {
-        int err = 0;
         while (running_.load()) {
+            if (paused_.load()) {
+                logger_->info("video thread paused");
+                std::unique_lock<std::mutex> lock(paused_mutex_);
+                paused_cv_.wait(lock, [&]() { return !paused_.load(); });
+                logger_->info("video thread resume");
+            }
+
             std::unique_lock<std::mutex> lock(video_mutex_);
             video_cv_.wait(lock, [&]() {
                 return !video_queue_.empty() || !running_.load();
@@ -762,8 +786,14 @@ void FFPlayer::AudioThreadFunc() {
     logger_->info("AudioThreadFunc running ...");
 
     try {
-        int err = 0;
         while (running_.load()) {
+            if (paused_.load()) {
+                logger_->info("audio thread paused");
+                std::unique_lock<std::mutex> lock(paused_mutex_);
+                paused_cv_.wait(lock, [&]() { return !paused_.load(); });
+                logger_->info("audio thread resume");
+            }
+
             std::unique_lock<std::mutex> lock(audio_mutex_);
             audio_cv_.wait(lock, [&]() {
                 return !audio_queue_.empty() || !running_.load();

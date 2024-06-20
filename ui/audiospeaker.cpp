@@ -7,6 +7,8 @@
 AudioSpeaker::AudioSpeaker(QObject *parent)
     : QThread{parent}, buffer_size_(0), queued_clock_(0.0) {
     // connect(this, &AudioSpeaker::stopSignal, this, &AudioSpeaker::stopSlot);
+    connect(this, &AudioSpeaker::pauseSignal, this, &AudioSpeaker::pauseSlot);
+    connect(this, &AudioSpeaker::resumeSignal, this, &AudioSpeaker::resumeSlot);
 }
 
 AudioSpeaker::~AudioSpeaker() {
@@ -20,6 +22,32 @@ void AudioSpeaker::Stop() {
     cond_.notify_one();
     // qDebug() << QThread::currentThreadId() << " stopSignal";
     // emit stopSignal();
+}
+
+void AudioSpeaker::Pause() {
+    // if (audio_sink_) {
+    //     audio_sink_->suspend();
+    // }
+    emit this->pauseSignal();
+}
+
+void AudioSpeaker::Resume() {
+    // if (audio_sink_) {
+    //     audio_sink_->resume();
+    // }
+    emit this->resumeSignal();
+}
+
+void AudioSpeaker::pauseSlot() {
+    if (audio_sink_) {
+        audio_sink_->suspend();
+    }
+}
+
+void AudioSpeaker::resumeSlot() {
+    if (audio_sink_) {
+        audio_sink_->resume();
+    }
 }
 
 // void AudioSpeaker::stopSlot() {

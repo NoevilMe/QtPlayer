@@ -1,4 +1,5 @@
 #include "playerform.h"
+#include "openmediadialog.h"
 #include "ui_playerform.h"
 
 #include "player/device.h"
@@ -87,6 +88,7 @@ bool PlayerForm::openMedia(MediaSource media) {
 
     if (player_->Play()) {
         qDebug() << "播放成功";
+        ui->pushButtonPlay->setChecked(true);
         return true;
     } else {
         qDebug() << "播放失败";
@@ -269,6 +271,7 @@ void PlayerForm::playDoneSlot() {
     qDebug() << "playDoneSlot";
     player_.reset();
     timerProgress->stop();
+    ui->pushButtonPlay->setChecked(false);
 }
 
 void PlayerForm::timerTimeoutSlot() {
@@ -317,4 +320,28 @@ void PlayerForm::loadIcons() {
     //                                   "border:1px solid transparent;"
     //                                   "}");
     // ui->pushButtonPlay->
+}
+
+void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
+    if (!player_) {
+        OpenMediaDialog dlg(this);
+        if (dlg.exec() == QDialog::Accepted) {
+            qDebug() << "open media " << (int)dlg.mediaSource.type << ", "
+                     << dlg.mediaSource.src;
+            openMedia(dlg.mediaSource);
+        }
+        return;
+    }
+
+    if (!checked) {
+        player_->Pause();
+        if (speaker_) {
+            speaker_->Pause();
+        }
+    } else {
+        player_->Play();
+        if (speaker_) {
+            speaker_->Resume();
+        }
+    }
 }

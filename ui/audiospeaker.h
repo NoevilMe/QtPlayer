@@ -16,6 +16,8 @@ public:
     ~AudioSpeaker();
 
     void Stop();
+    void Pause();
+    void Resume();
 
     QAudioDevice DefaultDevice();
     QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
@@ -24,11 +26,13 @@ public:
     void write(const char *data, int len, double clock);
     double AudioClock();
 
-// signals:
-//     void stopSignal();
+signals:
+    void pauseSignal();
+    void resumeSignal();
 
-// private slots:
-//     void stopSlot();
+private slots:
+    void pauseSlot();
+    void resumeSlot();
 
     // QThread interface
 protected:

@@ -4,21 +4,15 @@
 #include "av_def.h"
 #include "util/util.h"
 
+#include <list>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavfilter/avfilter.h>
-#include <libavfilter/buffersink.h>
-#include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
-
-#include <list>
-
-const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
-                                         AVHWDeviceType hwtype);
 
 struct AvFunctionInterrupt {
     long long func_start_timestamp = 0;
@@ -90,6 +84,9 @@ public:
     bool Play();
     // 是否播放
     bool IsPlaying() { return running_.load(); }
+
+    bool Pause();
+    bool isPaused() { return paused_.load(); }
 
     // 停止播放
     void Stop();
@@ -174,7 +171,12 @@ protected:
     std::mutex audio_mutex_;
     std::condition_variable audio_cv_;
 
+    std::atomic_bool paused_;
+    std::mutex paused_mutex_;
+    std::condition_variable paused_cv_;
+
     std::atomic_bool running_;
+
     std::thread read_thread_;
     std::function<void(AVFrame *)> video_frame_cb_;
     std::function<void(char *, int, double)> audio_frame_cb_;
@@ -299,5 +301,8 @@ private:
 
     std::function<void(char *, int, double)> frame_cb_;
 };
+
+const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
+                                         AVHWDeviceType hwtype);
 
 #endif // FFPLAYER_H
