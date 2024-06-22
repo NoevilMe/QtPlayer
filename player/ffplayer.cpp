@@ -58,8 +58,8 @@ const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
 
 FFPlayer::FFPlayer()
     : hwtype_(avutil::GetDefaultHWDeviceType()),
-      running_(false),
-      paused_(false) {
+      paused_(false),
+      running_(false) {
     logger_ = util::log::GetLogger(__func__);
     g_av_logger_ = logger_;
 }
@@ -75,7 +75,8 @@ bool FFPlayer::Open() {
         return false;
     }
 
-    Release();
+    // 重置MediaSource 之外的对象
+    Reset();
 
     return InitInputContext();
 }
@@ -131,10 +132,7 @@ void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
     if (paused_.load()) {
-        std::lock_guard<std::mutex> lock(paused_mutex_);
-        paused_.store(false);
-        paused_cv_.notify_all();
-        logger_->info("resume playing");
+        NotifyPauseResume();
         return true;
     }
 
@@ -546,17 +544,6 @@ bool FFPlayer::InitSwrContext() {
 
 bool FFPlayer::InitSwsContext() { return video_player_->InitSwsContext(); }
 
-void FFPlayer::Release() {
-    ResetInputContext();
-    ResetDecodeContext();
-
-    video_player_.reset();
-    audio_player_.reset();
-
-    paused_.store(false);
-    running_.store(false);
-}
-
 void FFPlayer::ResetInputContext() {
     if (fmt_ctx_) {
         avformat_close_input(&fmt_ctx_);
@@ -602,11 +589,32 @@ int FFPlayer::InterruptCallback(void *context) {
 }
 
 void FFPlayer::Stop() {
+    logger_->debug("Stop ...");
     StopThreads();
-    Release();
+
+    Reset();
+    logger_->debug("Stop done");
+}
+
+void FFPlayer::Reset() {
+    ResetInputContext();
+    ResetDecodeContext();
+
+    video_player_.reset();
+    audio_player_.reset();
 
     video_queue_.clear();
     audio_queue_.clear();
+
+    paused_.store(false);
+    running_.store(false);
+
+    is_open_ = false;
+}
+
+void FFPlayer::Release() {
+    Reset();
+
     media_source_.type = MediaType::kMediaNone;
     media_source_.src.clear();
 }
@@ -627,6 +635,11 @@ void FFPlayer::StartThreads() {
 
 void FFPlayer::StopThreads() {
     SetRunning(false);
+    // 提醒退出暂停模式
+    if (paused_.load()) {
+        NotifyPauseResume();
+    }
+    // 提醒退出视频、音频解码线程
     video_cv_.notify_all();
     audio_cv_.notify_all();
     JoinThreads();
@@ -646,6 +659,13 @@ void FFPlayer::JoinThreads() {
     }
 }
 
+void FFPlayer::NotifyPauseResume() {
+    std::lock_guard<std::mutex> lock(paused_mutex_);
+    paused_.store(false);
+    paused_cv_.notify_all();
+    logger_->info("resume playing");
+}
+
 void FFPlayer::SetRunning(bool run) {
     running_.store(run);
     logger_->trace("set running {}", running_.load());
@@ -656,9 +676,11 @@ void FFPlayer::ReadThreadFunc() {
 
     util::AtExit er([=]() {
         // 如果异常退出，需要停止其他线程
-        SetRunning(false);
-        video_cv_.notify_all();
-        audio_cv_.notify_all();
+        if (running_.load()) {
+            SetRunning(false);
+            video_cv_.notify_all();
+            audio_cv_.notify_all();
+        }
         logger_->info("ReadThreadFunc running done");
         if (play_done_cb_) {
             play_done_cb_();
@@ -673,6 +695,7 @@ void FFPlayer::ReadThreadFunc() {
                 std::unique_lock<std::mutex> lock(paused_mutex_);
                 paused_cv_.wait(lock, [&]() { return !paused_.load(); });
                 logger_->info("read thread resume");
+                continue;
             }
 
             if (video_queue_.size() > VIDEO_PACKET_MAX_SIZE ||
@@ -729,7 +752,7 @@ void FFPlayer::ReadThreadFunc() {
         logger_->error("ReadThreadFunc unknown exception");
     }
 
-    logger_->debug("ReadThreadFunc wait queue begin, video queue size {}, "
+    logger_->debug("ReadThreadFunc wait begin, video queue size {}, "
                    "audio queue size {}",
                    video_queue_.size(), audio_queue_.size());
     while (running_.load() &&
@@ -737,9 +760,7 @@ void FFPlayer::ReadThreadFunc() {
         logger_->trace("wait util queue empty");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    logger_->debug("ReadThreadFunc wait queue end");
-
-    logger_->debug("ReadThreadFunc end running {}", running_.load());
+    logger_->debug("ReadThreadFunc wait end, running {}", running_.load());
 }
 
 void FFPlayer::VideoThreadFunc() {
@@ -752,6 +773,7 @@ void FFPlayer::VideoThreadFunc() {
                 std::unique_lock<std::mutex> lock(paused_mutex_);
                 paused_cv_.wait(lock, [&]() { return !paused_.load(); });
                 logger_->info("video thread resume");
+                continue;
             }
 
             std::unique_lock<std::mutex> lock(video_mutex_);
@@ -792,6 +814,7 @@ void FFPlayer::AudioThreadFunc() {
                 std::unique_lock<std::mutex> lock(paused_mutex_);
                 paused_cv_.wait(lock, [&]() { return !paused_.load(); });
                 logger_->info("audio thread resume");
+                continue;
             }
 
             std::unique_lock<std::mutex> lock(audio_mutex_);

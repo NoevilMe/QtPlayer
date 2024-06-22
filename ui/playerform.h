@@ -55,6 +55,8 @@ private:
 
     void stopPlayer();
     void stopSpeaker();
+    void pauseSpeaker();
+    void resumeSpeaker();
 
 private:
     Ui::PlayerForm *ui;
@@ -68,8 +70,9 @@ private:
 
     QTimer *timerProgress; // 定时器-获取当前视频时间
 
-    std::unique_ptr<AudioSpeaker> speaker_;
+    std::atomic_bool sendingSpeaker;
+    std::unique_ptr<AudioSpeaker> speaker;
 
-    std::unique_ptr<FFPlayer> player_;
+    std::unique_ptr<FFPlayer> player;
 };
 #endif // MAINWINDOW_H

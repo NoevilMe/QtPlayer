@@ -121,6 +121,7 @@ protected:
     bool InitSwrContext();
     bool InitSwsContext();
 
+    void Reset();
     void Release();
 
     void ResetInputContext();
@@ -137,6 +138,8 @@ protected:
     void StartThreads();
     void StopThreads();
     void JoinThreads();
+
+    void NotifyPauseResume();
 
     void SetRunning(bool run);
     void ReadThreadFunc();

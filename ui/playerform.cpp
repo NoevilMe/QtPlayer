@@ -45,51 +45,50 @@ bool PlayerForm::openMedia(MediaSource media) {
     stopPlayer();
     stopSpeaker();
 
-    player_.reset(new FFPlayer);
-    player_->SetMediaSource(media);
-    if (!player_->Open()) {
+    player.reset(new FFPlayer);
+    player->SetMediaSource(media);
+    if (!player->Open()) {
         qDebug() << "打开失败";
         return false;
     }
 
-    qDebug() << "total seconds " << player_->GetTotalSeconds();
-    onTotalSeconds(player_->GetTotalSeconds());
+    qDebug() << "total seconds " << player->GetTotalSeconds();
+    onTotalSeconds(player->GetTotalSeconds());
 
-    if (player_->HasAudio()) {
+    if (player->HasAudio()) {
         AudioFormat audioFmt;
-        if (!player_->GetAudioFormat(&audioFmt)) {
+        if (!player->GetAudioFormat(&audioFmt)) {
             qDebug() << "获取音频参数失败";
             return false;
         }
 
-        speaker_.reset(new AudioSpeaker);
+        speaker.reset(new AudioSpeaker);
 
         AudioDeviceFormat deviceFmt;
         deviceFmt.channel_count = 2;
         deviceFmt.sample_rate = 44100;
         deviceFmt.sample_fmt = AudioSampleFormat::Int16;
-        player_->SetAudioDeviceFormat(deviceFmt);
+        player->SetAudioDeviceFormat(deviceFmt);
 
-        player_->SetAudioFrameCallback(
+        player->SetAudioFrameCallback(
             std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
                       std::placeholders::_2, std::placeholders::_3));
-        player_->SetAudioClockCallback(
-            [=]() { return speaker_->AudioClock(); });
-        speaker_->Start();
+        player->SetAudioClockCallback([=]() { return speaker->audioClock(); });
+        speaker->start();
         qDebug() << "speaker" << QThread::currentThreadId();
     }
 
-    player_->SetVideoFrameCallback(
+    player->SetVideoFrameCallback(
         std::bind(&PlayerForm::playVideo, this, std::placeholders::_1));
 
-    player_->SetPlayDoneCallback([=]() {
+    player->SetPlayDoneCallback([=]() {
         // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
         emit this->playDoneSignal();
     });
 
     timerProgress->start();
 
-    if (player_->Play()) {
+    if (player->Play()) {
         qDebug() << "播放成功";
         ui->pushButtonPlay->setChecked(true);
         return true;
@@ -100,11 +99,16 @@ bool PlayerForm::openMedia(MediaSource media) {
 }
 
 void PlayerForm::playAudio(char *buf, int size, double clock) {
-    while (speaker_->bytesFree() < size) {
+    if (!speaker)
+        return;
+
+    sendingSpeaker.store(true);
+    while (speaker->bytesFree() < size) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    speaker_->write(buf, size, clock);
+    emit speaker->write(buf, size, clock);
+    sendingSpeaker.store(false);
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {
@@ -198,25 +202,42 @@ void PlayerForm::onTotalSeconds(double seconds) {
 }
 
 void PlayerForm::stopPlayer() {
-    if (player_) {
-        qDebug() << "reset player ...";
+    if (player) {
+        qDebug() << QThread::currentThreadId() << "reset player ...";
 
         // 如果有正在执行的播放器，PlayDoneCallback的延迟执行可能会释放掉新的播放器
-        player_->SetPlayDoneCallback(nullptr);
+        player->SetPlayDoneCallback(nullptr);
 
-        if (player_->IsPlaying()) {
-            player_->Stop();
+        if (player->IsPlaying()) {
+            player->Stop();
         }
-        player_.reset();
+        player.reset();
     }
 }
 
 void PlayerForm::stopSpeaker() {
-    qDebug() << "stop speaker ...";
-    if (speaker_) {
-        qDebug() << "reset speaker ...";
-        speaker_->Stop();
-        speaker_.reset();
+    qDebug() << QThread::currentThreadId() << "stop speaker ...";
+    if (speaker) {
+        qDebug() << QThread::currentThreadId() << "reset speaker ...";
+        speaker->stop();
+        speaker.reset();
+    }
+}
+
+void PlayerForm::pauseSpeaker() {
+    if (speaker) {
+        // sendingSpeaker为真的时候可能在等待Speaker可用空间足量，贸然暂停可能会导致死循环
+        while (sendingSpeaker.load()) {
+            qDebug() << "wait speaker bytesFree enough";
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        emit speaker->pause();
+    }
+}
+
+void PlayerForm::resumeSpeaker() {
+    if (speaker) {
+        emit speaker->resume();
     }
 }
 
@@ -275,14 +296,14 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
 
 void PlayerForm::playDoneSlot() {
     qDebug() << "playDoneSlot";
-    player_.reset();
+    player.reset();
     timerProgress->stop();
     ui->pushButtonPlay->setChecked(false);
 }
 
 void PlayerForm::timerTimeoutSlot() {
     if (QObject::sender() == timerProgress) {
-        qint64 Sec = player_->GetClock();
+        qint64 Sec = player->GetClock();
         ui->horizontalSliderProgress->setValue(Sec);
 
         QString curTime;
@@ -329,7 +350,7 @@ void PlayerForm::loadIcons() {
 }
 
 void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
-    if (!player_) {
+    if (!player) {
         OpenMediaDialog dlg(this);
         if (dlg.exec() == QDialog::Accepted) {
             qDebug() << "open media " << (int)dlg.mediaSource.type << ", "
@@ -340,14 +361,10 @@ void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
     }
 
     if (!checked) {
-        player_->Pause();
-        if (speaker_) {
-            speaker_->Pause();
-        }
+        player->Pause();
+        pauseSpeaker();
     } else {
-        player_->Play();
-        if (speaker_) {
-            speaker_->Resume();
-        }
+        player->Play();
+        resumeSpeaker();
     }
 }

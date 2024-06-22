@@ -8,57 +8,59 @@
 
 #include <atomic>
 
+class AudioSpeakerImpl : public QObject {
+    Q_OBJECT
+public:
+    AudioSpeakerImpl();
+    ~AudioSpeakerImpl();
+
+    // 内部释放data
+    double audioClock();
+    int bytesFree();
+
+public slots:
+    void slotStart();
+    void slotStop();
+    void slotPause();
+    void slotResume();
+    void slotWrite(const char *data, int len, double clock);
+
+    QAudioDevice DefaultDevice();
+    QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
+
+    void handleStateChanged(QAudio::State newState);
+
+private:
+    QAudioFormat format_;
+    long long buffer_size_;
+
+    double queued_clock_;
+
+    QScopedPointer<QAudioSink> audio_sink_;
+    QIODevice *audio_device_ = nullptr;
+};
+
 class AudioSpeaker : public QObject {
     Q_OBJECT
 public:
     explicit AudioSpeaker();
     ~AudioSpeaker();
 
-    void Start();
-    void Stop();
-    void Pause();
-    void Resume();
-
-    QAudioDevice DefaultDevice();
-    QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
+    void start();
+    void stop();
 
     // 内部释放data
-
-    double AudioClock();
+    double audioClock();
     int bytesFree();
 
 signals:
-    void pauseSignal();
-    void resumeSignal();
+    void pause();
+    void resume();
     void write(const char *data, int len, double clock);
 
-private slots:
-    void pauseSlot();
-    void resumeSlot();
-    void writeSlot(const char *data, int len, double clock);
-
-    // QThread interface
-protected:
-    struct AudioSpeakerFrame {
-        const char *buf;
-        int length;
-        double clock;
-    };
-
-    void handleStateChanged(QAudio::State newState);
-    void readyRead();
-    void bytesWritten(qint64 bytes);
-    void channelReadyRead(int channel);
-    void channelBytesWritten(int channel, qint64 bytes);
-
 private:
-    QAudioFormat format_;
-    long long buffer_size_;
-
-    std::atomic<double> queued_clock_;
-
-    QScopedPointer<QAudioSink> audio_sink_;
-    QIODevice *audio_device_ = nullptr;
+    QThread *workThread;
+    AudioSpeakerImpl *impl;
 };
 
 #endif // AUDIOSPEAKER_H
