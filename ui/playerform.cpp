@@ -62,7 +62,7 @@ bool PlayerForm::openMedia(MediaSource media) {
             return false;
         }
 
-        speaker.reset(new AudioSpeaker);
+        speaker.reset(new AudioSpeaker(false));
 
         AudioDeviceFormat deviceFmt;
         deviceFmt.channel_count = 2;
@@ -102,13 +102,7 @@ void PlayerForm::playAudio(char *buf, int size, double clock) {
     if (!speaker)
         return;
 
-    sendingSpeaker.store(true);
-    while (speaker->bytesFree() < size) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    emit speaker->write(buf, size, clock);
-    sendingSpeaker.store(false);
+    speaker->write(buf, size, clock);
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {
@@ -226,18 +220,13 @@ void PlayerForm::stopSpeaker() {
 
 void PlayerForm::pauseSpeaker() {
     if (speaker) {
-        // sendingSpeaker为真的时候可能在等待Speaker可用空间足量，贸然暂停可能会导致死循环
-        while (sendingSpeaker.load()) {
-            qDebug() << "wait speaker bytesFree enough";
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        emit speaker->pause();
+        speaker->pause();
     }
 }
 
 void PlayerForm::resumeSpeaker() {
     if (speaker) {
-        emit speaker->resume();
+        speaker->resume();
     }
 }
 

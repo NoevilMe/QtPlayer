@@ -70,7 +70,6 @@ private:
 
     QTimer *timerProgress; // 定时器-获取当前视频时间
 
-    std::atomic_bool sendingSpeaker;
     std::unique_ptr<AudioSpeaker> speaker;
 
     std::unique_ptr<FFPlayer> player;

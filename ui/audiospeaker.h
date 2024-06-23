@@ -18,6 +18,11 @@ public:
     double audioClock();
     int bytesFree();
 
+signals:
+    void pause();
+    void resume();
+    void write(const char *data, int len, double clock);
+
 public slots:
     void slotStart();
     void slotStop();
@@ -43,24 +48,25 @@ private:
 class AudioSpeaker : public QObject {
     Q_OBJECT
 public:
-    explicit AudioSpeaker();
+    explicit AudioSpeaker(bool newThread = true);
     ~AudioSpeaker();
 
     void start();
     void stop();
 
-    // 内部释放data
-    double audioClock();
-    int bytesFree();
-
-signals:
     void pause();
     void resume();
     void write(const char *data, int len, double clock);
 
+    // 内部释放data
+    double audioClock();
+    int bytesFree();
+
 private:
+    bool createThread;
     QThread *workThread;
     AudioSpeakerImpl *impl;
+    std::atomic_bool sendingData;
 };
 
 #endif // AUDIOSPEAKER_H
