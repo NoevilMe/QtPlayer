@@ -22,7 +22,7 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
       program(nullptr) {
 
     // 使用信号槽跨线程传递
-    connect(this, &YuvVideoWidget::playVideoSignal, this,
+    connect(this, &YuvVideoWidget::playFrame, this,
             &YuvVideoWidget::playVideoSlot);
 }
 
@@ -386,6 +386,8 @@ void YuvVideoWidget::initTextures() {
     for (int i = 0; i < 3; ++i) {
         //--绑定纹理对象--
         glBindTexture(GL_TEXTURE_2D, textYUV[i]);
+        //字节对齐,网上很多代码都是少了这一步,导致有时候花屏 https://blog.csdn.net/feiyangqingyun/article/details/106985503
+        // glPixelStorei(GL_UNPACK_ROW_LENGTH, linesizeY);
         // 放大过滤，线性插值   GL_NEAREST(效率高，但马赛克严重)
         // 设置纹理的过滤方式
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);

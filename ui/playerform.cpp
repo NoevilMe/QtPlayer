@@ -62,7 +62,7 @@ bool PlayerForm::openMedia(MediaSource media) {
             return false;
         }
 
-        speaker.reset(new AudioSpeaker(false));
+        speaker.reset(new AudioSpeaker(true));
 
         AudioDeviceFormat deviceFmt;
         deviceFmt.channel_count = 2;
@@ -110,11 +110,13 @@ void PlayerForm::playVideo(AVFrame *frame) {
         return;
     }
 
-    QSharedPointer<VideoFrame> videoFrame(
-        new VideoFrame(frame->format, frame->width, frame->height));
+    QSharedPointer<VideoFrame> videoFrame;
 
-    if (AV_PIX_FMT_YUV420P == videoFrame->pixfmt ||
-        AV_PIX_FMT_YUVJ420P == videoFrame->pixfmt) {
+    if (AV_PIX_FMT_YUV420P == frame->format ||
+        AV_PIX_FMT_YUVJ420P == frame->format) {
+
+        videoFrame.reset(
+            new VideoFrame(frame->format, frame->width, frame->height));
 
         for (int i = 0; i < frame->height; i++) {
             memcpy(videoFrame->data[0] + i * frame->width,
@@ -132,7 +134,11 @@ void PlayerForm::playVideo(AVFrame *frame) {
                    frame->data[2] + i * frame->linesize[2], frame->width / 2);
         }
 
-    } else if (AV_PIX_FMT_NV12 == videoFrame->pixfmt) {
+    } else if (AV_PIX_FMT_NV12 == frame->format) {
+#if 0
+        videoFrame.reset(
+            new VideoFrame(frame->format, frame->width, frame->height));
+
         for (int i = 0; i < frame->height; i++) {
             memcpy(videoFrame->data[0] + i * frame->width,
                    frame->data[0] + i * frame->linesize[0],
@@ -144,10 +150,27 @@ void PlayerForm::playVideo(AVFrame *frame) {
                    frame->data[1] + i * frame->linesize[1],
                    frame->width); // UV数据在一起
         }
+#else
+        int width = frame->linesize[0];
+
+        videoFrame.reset(new VideoFrame(frame->format, width, frame->height));
+
+        for (int i = 0; i < frame->height; i++) {
+            memcpy(videoFrame->data[0] + i * width,
+                   frame->data[0] + i * frame->linesize[0],
+                   width); // 按行复制数据，末尾有对齐数据
+        }
+
+        for (int i = 0; i < frame->height / 2; i++) {
+            memcpy(videoFrame->data[1] + i * width,
+                   frame->data[1] + i * frame->linesize[1],
+                   width); // UV数据在一起
+        }
+#endif
     }
 
     // qDebug() << QThread::currentThreadId() << "playVideo";
-    emit ui->openGLWidget->playVideoSignal(videoFrame);
+    emit ui->openGLWidget->playFrame(videoFrame);
 }
 
 void PlayerForm::clickPushButtonFullScreen() {

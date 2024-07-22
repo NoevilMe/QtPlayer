@@ -30,7 +30,7 @@ public:
     bool isSupportedFormat(int fmt);
 
 signals:
-    void playVideoSignal(const QSharedPointer<VideoFrame> &frame);
+    void playFrame(const QSharedPointer<VideoFrame> &frame);
 
 private slots:
     void playVideoSlot(const QSharedPointer<VideoFrame> &frame);

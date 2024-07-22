@@ -128,7 +128,7 @@ double FFPlayer::GetClock() {
     }
 }
 
-void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
+// void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
     if (paused_.load()) {

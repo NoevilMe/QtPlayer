@@ -77,7 +77,7 @@ public:
     double GetClock();
 
     // 设置音频重采样参数，Play前
-    void SetAudioResampleFormat(AudioFormat fmt);
+    // void SetAudioResampleFormat(AudioFormat fmt);
     void SetAudioDeviceFormat(AudioDeviceFormat fmt);
 
     // 再播放
