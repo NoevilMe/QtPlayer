@@ -22,7 +22,7 @@ public:
 signals:
     void pause();
     void resume();
-    void write(const char *data, int len, double clock);
+    void write(const std::shared_ptr<std::string> &data, double clock);
 
 public slots:
     // 随线程外部绑定，或者直接调用
@@ -31,7 +31,7 @@ public slots:
     // 内部绑定
     void slotPause();
     void slotResume();
-    void slotWrite(const char *data, int len, double clock);
+    void slotWrite(const std::shared_ptr<std::string> &data, double clock);
 
     QAudioDevice DefaultDevice();
     QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
@@ -64,7 +64,7 @@ public:
     void resume();
 
     // 写入音频数据
-    void write(const char *data, int len, double clock);
+    void write(const std::shared_ptr<std::string> &data, double clock);
     // 当前可用缓存空间
     int bytesFree();
 

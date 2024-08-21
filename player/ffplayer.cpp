@@ -145,9 +145,9 @@ bool FFPlayer::Play() {
 
     // 播放之前应该设置重采样参数
     if (audio_player_) {
-        audio_player_->SetFrameCallback(
-            std::bind(&FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
-                      std::placeholders::_2, std::placeholders::_3));
+        audio_player_->SetFrameCallback(std::bind(&FFPlayer::PlayAudioFrame,
+                                                  this, std::placeholders::_1,
+                                                  std::placeholders::_2));
         audio_player_->set_resample_format(resample_fmt_);
     }
 
@@ -250,11 +250,12 @@ void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
     video_frame_cb_(frame);
 }
 
-void FFPlayer::PlayAudioFrame(char *data, int length, double clock) {
+void FFPlayer::PlayAudioFrame(const std::shared_ptr<std::string> &data,
+                              double clock) {
     if (audio_frame_cb_) {
-        audio_frame_cb_(data, length, clock);
-        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data, length,
-                       clock);
+        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data->data(),
+                       data->length(), clock);
+        audio_frame_cb_(data, clock);
     }
 }
 
@@ -388,9 +389,9 @@ bool FFPlayer::InitInputContext() {
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
                    !audio_player_) {
             audio_player_.reset(new AudioPlayer(i, stream));
-            audio_player_->SetFrameCallback(std::bind(
-                &FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
-                std::placeholders::_2, std::placeholders::_3));
+            audio_player_->SetFrameCallback(
+                std::bind(&FFPlayer::PlayAudioFrame, this,
+                          std::placeholders::_1, std::placeholders::_2));
             audio_player_->set_resample_format(resample_fmt_);
         }
     }
@@ -1375,17 +1376,18 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
         //                         256;
 
         if (swr_ctx_) {
-            // 采样数空间留有余量
+            // 重采样的采样数，空间留有余量
             auto out_count = decoded_frame_->nb_samples * 3 / 2;
 
-            auto audio_buf_len = av_samples_get_buffer_size(
+            // 计算buffer容量
+            auto resample_buf_size = av_samples_get_buffer_size(
                 nullptr, resample_fmt_.channel_count, out_count,
                 resample_fmt_.sample_fmt, 0);
             logger_->trace(
                 "out count {}, av_samples_get_buffer_size out size {} ",
-                out_count, audio_buf_len);
+                out_count, resample_buf_size);
 
-            uint8_t *audio_buf = new uint8_t[audio_buf_len];
+            uint8_t *resample_buf = new uint8_t[resample_buf_size];
 
             // av_samples_alloc_array_and_samples
             // av_samples_alloc和av_samples_get_buffer_size的计算空间是一样的。
@@ -1405,33 +1407,46 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
                 (const uint8_t **)decoded_frame_->extended_data;
             int in_count = decoded_frame_->nb_samples;
 
-            // swr_convert_frame。输出每帧的采样数
-            int out_nb_samples = swr_convert(swr_ctx_, &audio_buf,
-                                             audio_buf_len, in_data, in_count);
-            logger_->trace("out_nb_samples {}", out_nb_samples);
-            if (out_nb_samples < 0) {
+            // swr_convert_frame。输出重采样之后，每帧的采样数
+            int resample_nb_samples = swr_convert(
+                swr_ctx_, &resample_buf, resample_buf_size, in_data, in_count);
+            logger_->trace("resample nb_samples {}", resample_nb_samples);
+            if (resample_nb_samples < 0) {
                 logger_->error("swr_convert error, {}",
-                               avutil::ErrorString(out_nb_samples));
+                               avutil::ErrorString(resample_nb_samples));
                 return false;
             }
 
-            int data_size = out_nb_samples * resample_fmt_.channel_count *
-                            av_get_bytes_per_sample(resample_fmt_.sample_fmt);
-            logger_->trace("resample frame data size {}", data_size);
+            int resample_frame_size =
+                resample_nb_samples * resample_fmt_.channel_count *
+                av_get_bytes_per_sample(resample_fmt_.sample_fmt);
+            logger_->trace("resample frame size {}", resample_frame_size);
 
             double clock = decoded_frame_->pts * av_q2d(stream_->time_base);
-            logger_->debug("audio frame pts {},  clock {}", decoded_frame_->pts,
+            logger_->debug("audio frame pts {}, clock {}", decoded_frame_->pts,
                            clock);
             if (frame_cb_) {
-                frame_cb_((char *)audio_buf, data_size, clock);
-                logger_->debug("frame_cb_ {}, {}, {}", (void *)audio_buf,
-                               data_size, clock);
+                std::shared_ptr<std::string> audio_data(new std::string(
+                    (const char *)resample_buf, resample_frame_size));
+
+                logger_->debug("frame_cb_ {}, {}, {}",
+                               (void *)audio_data->data(), audio_data->length(),
+                               clock);
+                frame_cb_(audio_data, clock);
             }
+            delete[] resample_buf;
 
-            delete[] audio_buf;
+            double frame_interval = (double)decoded_frame_->nb_samples /
+                                    decoded_frame_->sample_rate;
 
+            int sleeptime =
+                frame_interval * 1000000 *
+                0.9; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
+
+            logger_->trace("frame_interval {}, sleep {}", frame_interval,
+                           sleeptime);
             // FIXME:
-            std::this_thread::sleep_for(std::chrono::microseconds(23220));
+            std::this_thread::sleep_for(std::chrono::microseconds(sleeptime));
 
             /*
         // 转码音频帧
@@ -1467,19 +1482,6 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
         QEventLoop loop;
         QTimer::singleShot(time * 1000, &loop, [&]() { loop.quit(); });
         loop.exec(); */
-
-            // uint8_t *data[2] = {0};
-            //                if(!pcm)pcm = new
-            //                uint8_t[frame->nb_samples*2*2]; data[0] = pcm;
-            ////                int swr_convert(struct SwrContext *s,
-            /// uint8_t **out,
-            /// int out_count, / const uint8_t **in , int in_count);
-
-            //               ret = swr_convert(actx,
-            //                                   data, frame->nb_samples,
-            //                                   //输出 (const
-            //                                   uint8_t**)frame->data,frame->nb_samples
-            //                                   //输入
         }
     }
 

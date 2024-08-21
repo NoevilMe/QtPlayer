@@ -67,9 +67,9 @@ bool PlayerForm::openMedia(MediaSource media) {
         deviceFmt.sample_fmt = AudioSampleFormat::Int16;
         player->SetAudioDeviceFormat(deviceFmt);
 
-        player->SetAudioFrameCallback(
-            std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
-                      std::placeholders::_2, std::placeholders::_3));
+        player->SetAudioFrameCallback(std::bind(&PlayerForm::playAudio, this,
+                                                std::placeholders::_1,
+                                                std::placeholders::_2));
         player->SetAudioClockCallback([=]() { return speaker->audioClock(); });
         speaker->start();
         qDebug() << "speaker" << QThread::currentThreadId();
@@ -95,11 +95,12 @@ bool PlayerForm::openMedia(MediaSource media) {
     }
 }
 
-void PlayerForm::playAudio(char *buf, int size, double clock) {
+void PlayerForm::playAudio(const std::shared_ptr<std::string> &data,
+                           double clock) {
     if (!speaker)
         return;
 
-    speaker->write(buf, size, clock);
+    speaker->write(data, clock);
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {

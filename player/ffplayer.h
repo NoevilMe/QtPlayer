@@ -95,8 +95,9 @@ public:
         video_frame_cb_ = cb;
     }
 
-    void
-    SetAudioFrameCallback(const std::function<void(char *, int, double)> &cb) {
+    void SetAudioFrameCallback(
+        const std::function<void(const std::shared_ptr<std::string> &, double)>
+            &cb) {
         audio_frame_cb_ = cb;
     }
 
@@ -110,7 +111,7 @@ public:
 
 protected:
     void PlayVideoFrame(AVFrame *frame, double clock);
-    void PlayAudioFrame(char *data, int length, double clock);
+    void PlayAudioFrame(const std::shared_ptr<std::string> &data, double clock);
 
     bool ResampleFormatValid() const;
 
@@ -182,7 +183,8 @@ protected:
 
     std::thread read_thread_;
     std::function<void(AVFrame *)> video_frame_cb_;
-    std::function<void(char *, int, double)> audio_frame_cb_;
+    std::function<void(const std::shared_ptr<std::string> &, double)>
+        audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
     std::function<void(void)> play_done_cb_;
     std::shared_ptr<spdlog::logger> logger_;
@@ -291,7 +293,9 @@ public:
     bool InitSwrContext();
     void ResetSwrContext();
 
-    void SetFrameCallback(const std::function<void(char *, int, double)> &cb) {
+    void SetFrameCallback(
+        const std::function<void(const std::shared_ptr<std::string> &, double)>
+            &cb) {
         frame_cb_ = cb;
     }
 
@@ -302,7 +306,7 @@ private:
     AudioFormat resample_fmt_;
     SwrContext *swr_ctx_ = nullptr;
 
-    std::function<void(char *, int, double)> frame_cb_;
+    std::function<void(const std::shared_ptr<std::string> &, double)> frame_cb_;
 };
 
 const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,

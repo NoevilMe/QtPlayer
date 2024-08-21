@@ -22,9 +22,9 @@ AudioSpeakerImpl::~AudioSpeakerImpl() {
 }
 
 double AudioSpeakerImpl::audioClock() {
-    //     buffer_size_ = format_.sampleRate() * format_.bytesPerSample()
-    //     *format_.channelCount();
-    //     buffer_size_保存的1秒数据量。如果不是这个长度，需要修改计算公式
+    // buffer_size_ = format_.sampleRate() * format_.bytesPerSample()
+    //   *format_.channelCount();
+    // buffer_size_保存的1秒数据量。如果不是这个长度，需要修改计算公式
     if (buffer_size_ <= 0) {
         return 0;
     } else if (!audio_sink_) {
@@ -87,13 +87,14 @@ void AudioSpeakerImpl::slotResume() {
         audio_sink_->resume();
 }
 
-void AudioSpeakerImpl::slotWrite(const char *data, int len, double clock) {
+void AudioSpeakerImpl::slotWrite(const std::shared_ptr<std::string> &data,
+                                 double clock) {
     if (!audio_device_) {
         return;
     }
 
     // write会触发QTimer，所以也必须在创建者同一个线程。
-    audio_device_->write(data, len);
+    audio_device_->write(data->data(), data->length());
     queued_clock_ = clock;
     qDebug() << QThread::currentThreadId() << "queued frame clock " << clock
              << ", audio clock " << audioClock()
@@ -214,18 +215,20 @@ void AudioSpeaker::resume() {
     }
 }
 
-void AudioSpeaker::write(const char *data, int len, double clock) {
+void AudioSpeaker::write(const std::shared_ptr<std::string> &data,
+                         double clock) {
     if (!impl)
         return;
 
     sendingData.store(true);
     // 这在音频线程执行，但是impl可能会被其他线程停止掉
-    while (impl && impl->bytesFree() < len) {
+    while (impl && impl->bytesFree() < data->length()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
+    // 这里信号槽可能会导致跨线程，具体看impl实现
     if (impl) {
-        emit impl->write(data, len, clock);
+        emit impl->write(data, clock);
     }
     sendingData.store(false);
 }
