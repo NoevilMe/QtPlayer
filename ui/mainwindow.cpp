@@ -22,7 +22,11 @@ MainWindow::MainWindow(QWidget *parent)
     pageMonitor->setObjectName("monitor");
     ui->stackedWidget->addWidget(pagePlayer);
     ui->stackedWidget->addWidget(pageMonitor);
-    ui->stackedWidget->setCurrentWidget(pagePlayer);
+
+    if (curWinType == WindowType::Player) {
+        ui->stackedWidget->setCurrentWidget(pagePlayer);
+    }
+
     ui->stackedWidget->update();
 
     loadStyleSheet(Light);
@@ -103,6 +107,8 @@ void MainWindow::installWindowAgent() {
         auto win = new QMenu(tr("窗口(&W)"), menuBar);
         auto winPlayerAction = new QAction(tr("播放器(&P)"), menuBar);
         winPlayerAction->setCheckable(true);
+        curWinType = WindowType::Player;
+
         win->addAction(winPlayerAction);
         auto winMonitorAction = new QAction(tr("监视器(&M)"), menuBar);
         winMonitorAction->setCheckable(true);
@@ -247,6 +253,7 @@ void MainWindow::installWindowAgent() {
 void MainWindow::getAllDevices() {}
 
 void MainWindow::switchWindowType(WindowType type) {
+    curWinType = type;
     if (type == WindowType::Player) {
         ui->stackedWidget->setCurrentWidget(pagePlayer);
     } else if (type == WindowType::Monitor) {
@@ -257,11 +264,8 @@ void MainWindow::switchWindowType(WindowType type) {
 }
 
 void MainWindow::openMediaActionTriggered(bool checked) {
-    OpenMediaDialog dlg(this);
-    if (dlg.exec() == QDialog::Accepted) {
-        qDebug()<<"open media " << (int)dlg.mediaSource.type <<", " << dlg.mediaSource.src;
-
-        pagePlayer->openMedia(dlg.mediaSource);
+    if (curWinType == WindowType::Player) {
+        pagePlayer->openDialog();
     }
 }
 

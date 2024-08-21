@@ -58,6 +58,7 @@ private:
     Theme currentTheme{};
     void loadStyleSheet(Theme theme);
 
+    WindowType curWinType;
     PlayerForm *pagePlayer;
     MultiPlayerForm *pageMonitor;
 };

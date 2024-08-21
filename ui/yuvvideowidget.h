@@ -29,6 +29,9 @@ public:
     QList<int> supportedFormats() { return formats; }
     bool isSupportedFormat(int fmt);
 
+    void clear();
+    void displayEnable(bool enable);
+
 signals:
     void playFrame(const QSharedPointer<VideoFrame> &frame);
 
@@ -71,6 +74,7 @@ private:
     QOpenGLShaderProgram *program; // 着色器程序容器
 
     QSharedPointer<VideoFrame> videoFrame;
+    bool display;
 
     //    QOpenGLVertexArrayObject vaoQuad;
     //    QOpenGLBuffer vboQuad;

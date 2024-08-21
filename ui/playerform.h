@@ -29,6 +29,8 @@ public:
     void playAudio(const std::shared_ptr<std::string> &data, double clock);
     void playVideo(AVFrame *frame);
 
+    void openDialog();
+
 signals:
     void playDoneSignal();
 

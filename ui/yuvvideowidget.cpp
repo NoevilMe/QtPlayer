@@ -19,7 +19,8 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
       posVBO(0),
       textVBO(0),
       vao(0),
-      program(nullptr) {
+      program(nullptr),
+      display(true) {
 
     // 使用信号槽跨线程传递
     connect(this, &YuvVideoWidget::playFrame, this,
@@ -57,8 +58,40 @@ bool YuvVideoWidget::isSupportedFormat(int fmt) {
     return formats.contains(fmt);
 }
 
+void YuvVideoWidget::clear() {
+    /*
+0x258c playVideo
+0x258c opengl playFrame
+0x58ac reset player done
+0x58ac stop speaker ...
+0x58ac reset speaker ...
+...
+0x58ac playDoneSlot
+YuvVideoWidget::clear()
+0x58ac playVideoSlot
+0x58ac paintGL  QRect(0,0 654x302)
+0x58ac paintGL bind
+
+信号槽机制会导致先前传递到UI的视频帧，可能会在videoFrame.reset()了之后才到达。
+     */
+    qDebug() << QThread::currentThreadId() << "opengl clear()";
+    displayEnable(false);
+    videoFrame.reset();
+
+    // glClearColor(0.0, 0.0, 0.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    update();
+}
+
+void YuvVideoWidget::displayEnable(bool enable) { display = enable; }
+
 void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
-    // qDebug()<< QThread::currentThreadId() <<"playVideoSlot";
+    // qDebug() << QThread::currentThreadId() << "playVideoSlot";
+
+    if (!display)
+        return;
+
     videoFrame = frame;
 
     if (!videoFrame)
@@ -175,10 +208,11 @@ void YuvVideoWidget::resizeGL(int w, int h) {
 }
 
 void YuvVideoWidget::paintGL() {
-    //    qDebug() << "paintGL " << this->rect();
-
+    // qDebug() << QThread::currentThreadId() << "paintGL " << this->rect();
     if (!videoFrame)
         return;
+
+    // qDebug() << QThread::currentThreadId() << "paintGL bind";
 
     program->bind();
     program->setUniformValue("trans", trans);
@@ -386,10 +420,11 @@ void YuvVideoWidget::initTextures() {
     for (int i = 0; i < 3; ++i) {
         //--绑定纹理对象--
         glBindTexture(GL_TEXTURE_2D, textYUV[i]);
-        //字节对齐,网上很多代码都是少了这一步,导致有时候花屏 https://blog.csdn.net/feiyangqingyun/article/details/106985503
-        // glPixelStorei(GL_UNPACK_ROW_LENGTH, linesizeY);
-        // 放大过滤，线性插值   GL_NEAREST(效率高，但马赛克严重)
-        // 设置纹理的过滤方式
+        // 字节对齐,网上很多代码都是少了这一步,导致有时候花屏
+        // https://blog.csdn.net/feiyangqingyun/article/details/106985503
+        //  glPixelStorei(GL_UNPACK_ROW_LENGTH, linesizeY);
+        //  放大过滤，线性插值   GL_NEAREST(效率高，但马赛克严重)
+        //  设置纹理的过滤方式
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         // 设置纹理的包裹方式

@@ -104,6 +104,8 @@ void PlayerForm::playAudio(const std::shared_ptr<std::string> &data,
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {
+    qDebug() << QThread::currentThreadId() << "playVideo";
+
     if (!ui->openGLWidget->isSupportedFormat(frame->format)) {
         return;
     }
@@ -167,8 +169,19 @@ void PlayerForm::playVideo(AVFrame *frame) {
 #endif
     }
 
-    // qDebug() << QThread::currentThreadId() << "playVideo";
+    // 这个函数当前比较耗时，进入函数时候可能还没停止，但是这的时候播放器已经停止播放了。
+
+    qDebug() << QThread::currentThreadId() << "opengl playFrame";
     emit ui->openGLWidget->playFrame(videoFrame);
+}
+
+void PlayerForm::openDialog() {
+    OpenMediaDialog dlg(this);
+    if (dlg.exec() == QDialog::Accepted) {
+        qDebug() << "open media " << (int)dlg.mediaSource.type << ", "
+                 << dlg.mediaSource.src;
+        openMedia(dlg.mediaSource);
+    }
 }
 
 void PlayerForm::clickPushButtonFullScreen() {
@@ -227,6 +240,7 @@ void PlayerForm::stopPlayer() {
             player->Stop();
         }
         player.reset();
+        qDebug() << QThread::currentThreadId() << "reset player done";
     }
 }
 
@@ -305,7 +319,7 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
 }
 
 void PlayerForm::playDoneSlot() {
-    qDebug() << "playDoneSlot";
+    qDebug() << QThread::currentThreadId() << "playDoneSlot";
     player.reset();
     timerProgress->stop();
     ui->pushButtonPlay->setChecked(false);
@@ -313,6 +327,9 @@ void PlayerForm::playDoneSlot() {
 
 void PlayerForm::timerTimeoutSlot() {
     if (QObject::sender() == timerProgress) {
+        if (!player)
+            return;
+
         qint64 Sec = player->GetClock();
         ui->horizontalSliderProgress->setValue(Sec);
 
@@ -360,13 +377,10 @@ void PlayerForm::loadIcons() {
 }
 
 void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
+    ui->openGLWidget->displayEnable(true);
+
     if (!player) {
-        OpenMediaDialog dlg(this);
-        if (dlg.exec() == QDialog::Accepted) {
-            qDebug() << "open media " << (int)dlg.mediaSource.type << ", "
-                     << dlg.mediaSource.src;
-            openMedia(dlg.mediaSource);
-        }
+        openDialog();
         return;
     }
 
@@ -382,4 +396,7 @@ void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
 void PlayerForm::on_pushButtonStop_clicked() {
     stopPlayer();
     stopSpeaker();
+    emit playDoneSignal();
+
+    ui->openGLWidget->clear();
 }

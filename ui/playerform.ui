@@ -78,7 +78,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QWidget" name="widgetControl" native="true">
+         <widget class="QWidget" name="widgetControlPane" native="true">
           <layout class="QVBoxLayout" name="verticalLayoutControl">
            <property name="spacing">
             <number>2</number>

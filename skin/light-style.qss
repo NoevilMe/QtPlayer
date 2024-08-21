@@ -196,7 +196,7 @@ background-color:red;
     stop:0.778409 rgba(255, 255, 255, 255)); */
 }
 
-QWidget#centralwidget QPushButton{
+QWidget#widgetControlPane > QPushButton{
 background:transparent;
 border:none;
 max-width:24px;
@@ -205,17 +205,17 @@ max-height:24px;
 min-height:24px;
 }
 
-QWidget#centralwidget{
+QWidget#widgetControlPane{
 background:transparent;
 border:1;
 color: #FF0000;
 }
 
-QWidget#centralwidget  QPushButton:hover{
+QWidget#widgetControlPane > QPushButton:hover{
 border:1px solid transparent;
 }
 
-QWidget#centralwidget QPushButton#pushButtonPlay{
+QWidget#widgetControlPane > QPushButton#pushButtonPlay{
 background:transparent;
 border:none;
 max-width:24px;
@@ -225,11 +225,11 @@ min-height:24px;
 image:url(:/images/Play.png);
 }
 
-QWidget#centralwidget QPushButton#pushButtonPlay:hover{
+QWidget#widgetControlPane > QPushButton#pushButtonPlay:hover{
 border:1px solid transparent;
 }
 
-QWidget#centralwidget QPushButton#pushButtonPlay:checked{
+QWidget#widgetControlPane > QPushButton#pushButtonPlay:checked{
 image:url(:/images/Pause.png);
 }
 
