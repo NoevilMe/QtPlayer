@@ -24,7 +24,7 @@ AudioSpeakerImpl::~AudioSpeakerImpl() {
 double AudioSpeakerImpl::audioClock() {
     //     buffer_size_ = format_.sampleRate() * format_.bytesPerSample()
     //     *format_.channelCount();
-    //     1秒数据量。如果不是这个长度，需要修改计算公式
+    //     buffer_size_保存的1秒数据量。如果不是这个长度，需要修改计算公式
     if (buffer_size_ <= 0) {
         return 0;
     } else if (!audio_sink_) {
@@ -54,10 +54,11 @@ void AudioSpeakerImpl::slotStart() {
     connect(audio_sink_.get(), &QAudioSink::stateChanged, this,
             &AudioSpeakerImpl::handleStateChanged);
 
+    // 设定缓存大小
     buffer_size_ = format_.sampleRate() * format_.bytesPerSample() *
                    format_.channelCount(); // 1秒数据量
-
     audio_sink_->setBufferSize(buffer_size_);
+
     audio_device_ = audio_sink_->start();
 
     qDebug() << QThread::currentThreadId()
@@ -68,6 +69,8 @@ void AudioSpeakerImpl::slotStart() {
 void AudioSpeakerImpl::slotStop() {
     if (audio_sink_) {
         audio_sink_->stop();
+        disconnect(audio_sink_.get(), &QAudioSink::stateChanged, this,
+                   &AudioSpeakerImpl::handleStateChanged);
         audio_sink_.reset();
         audio_device_ = nullptr;
     }
@@ -95,8 +98,6 @@ void AudioSpeakerImpl::slotWrite(const char *data, int len, double clock) {
     qDebug() << QThread::currentThreadId() << "queued frame clock " << clock
              << ", audio clock " << audioClock()
              << ", bytes free: " << audio_sink_->bytesFree();
-
-    delete[] data;
 }
 
 QAudioDevice AudioSpeakerImpl::DefaultDevice() {
@@ -198,7 +199,7 @@ void AudioSpeaker::stop() {
 
 void AudioSpeaker::pause() {
     if (impl) {
-        // sendingSpeaker为真的时候可能在等待Speaker可用空间足量，贸然暂停可能会导致死循环
+        // sendingData为真的时候可能在等待Speaker可用空间足量，贸然暂停可能会导致死循环
         while (sendingData.load()) {
             qDebug() << "wait speaker bytesFree enough";
             std::this_thread::sleep_for(std::chrono::milliseconds(5));

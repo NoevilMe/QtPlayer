@@ -124,4 +124,9 @@ std::string ChannelLayoutDescribe(const AVChannelLayout *ch_layout) {
     return std::string(buf);
 }
 
+double FrameInterval(long long duration, const AVRational &time_base) {
+    // 帧间间隔等与duration与time_base相乘，得到浮点数单位为秒
+    return duration * av_q2d(time_base);
+}
+
 } // namespace avutil

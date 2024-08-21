@@ -2,8 +2,6 @@
 #include "openmediadialog.h"
 #include "ui_playerform.h"
 
-#include "player/device.h"
-
 #include <QFile>
 #include <QMediaDevices>
 #include <QStyle>
@@ -24,7 +22,6 @@ PlayerForm::PlayerForm(QWidget *parent)
             &PlayerForm::timerTimeoutSlot);
     timerProgress->setInterval(500);
 
-    //    listOutputAudioDevices();
     connect(this, &PlayerForm::playDoneSignal, this, &PlayerForm::playDoneSlot);
 
     qDebug() << "PlayerForm" << QThread::currentThreadId();
@@ -379,4 +376,9 @@ void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
         player->Play();
         resumeSpeaker();
     }
+}
+
+void PlayerForm::on_pushButtonStop_clicked() {
+    stopPlayer();
+    stopSpeaker();
 }

@@ -27,17 +27,11 @@ const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,
         }
 
         if (g_av_logger_) {
-            if (AV_HWDEVICE_TYPE_NONE == config->device_type) {
-                // d3d11va_vld 没有加速器
-                g_av_logger_->debug(
-                    "found available hw config [None, {}] for codec {}",
-                    avutil::GetPixFmtName(config->pix_fmt), codec->name);
-            } else {
-                g_av_logger_->debug(
-                    "found available hw config [{}, {}] for codec {}",
-                    avutil::GetHWDeviceTypeName(config->device_type),
-                    avutil::GetPixFmtName(config->pix_fmt), codec->name);
-            }
+            // d3d11va_vld 没有加速器
+            g_av_logger_->debug(
+                "found available hw config [{}, {}] for codec {}",
+                avutil::GetHWDeviceTypeName(config->device_type),
+                avutil::GetPixFmtName(config->pix_fmt), codec->name);
         }
 
         /**
@@ -127,8 +121,6 @@ double FFPlayer::GetClock() {
         return 0;
     }
 }
-
-// void FFPlayer::SetAudioResampleFormat(AudioFormat fmt) { resample_fmt_ = fmt; }
 
 bool FFPlayer::Play() {
     if (paused_.load()) {
@@ -305,7 +297,6 @@ bool FFPlayer::InitInputContext() {
     }
 
     fmt_ctx_ = avformat_alloc_context();
-
     if (!fmt_ctx_) {
         logger_->error("avformat_alloc_context fail");
         return false;
@@ -1435,9 +1426,9 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
                 frame_cb_((char *)audio_buf, data_size, clock);
                 logger_->debug("frame_cb_ {}, {}, {}", (void *)audio_buf,
                                data_size, clock);
-            } else {
-                delete[] audio_buf;
             }
+
+            delete[] audio_buf;
 
             // FIXME:
             std::this_thread::sleep_for(std::chrono::microseconds(23220));

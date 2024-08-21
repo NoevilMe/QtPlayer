@@ -39,8 +39,10 @@ private slots:
     void playDoneSlot();
     void timerTimeoutSlot();
 
-    // QWidget interface
+    // 播放、暂停
     void on_pushButtonPlay_clicked(bool checked);
+    // 停止
+    void on_pushButtonStop_clicked();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

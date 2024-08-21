@@ -19,6 +19,9 @@ AVHWDeviceType GetDefaultHWDeviceType();
 std::string GetDecoderSuffixByHWDeviceType(AVHWDeviceType type);
 std::string ChannelLayoutDescribe(const AVChannelLayout *ch_layout);
 void GetAllDevices();
+
+double FrameInterval(long long duration, const AVRational &time_base);
+
 } // namespace avutil
 
 #endif // AV_UTIL_H

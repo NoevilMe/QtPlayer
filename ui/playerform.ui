@@ -125,6 +125,9 @@
              </property>
              <item>
               <widget class="QPushButton" name="pushButtonPrevious">
+               <property name="toolTip">
+                <string>后退</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -142,6 +145,9 @@
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonNext">
+               <property name="toolTip">
+                <string>前进</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -149,6 +155,9 @@
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonStop">
+               <property name="toolTip">
+                <string>停止</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -156,6 +165,9 @@
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonSlow">
+               <property name="toolTip">
+                <string>减速</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -163,6 +175,9 @@
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonFast">
+               <property name="toolTip">
+                <string>加速</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -210,6 +225,9 @@
                  <height>30</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>音量</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -222,6 +240,9 @@
                  <width>30</width>
                  <height>30</height>
                 </size>
+               </property>
+               <property name="toolTip">
+                <string>顺序循环</string>
                </property>
                <property name="text">
                 <string/>
@@ -236,6 +257,9 @@
                  <height>30</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>全屏</string>
+               </property>
                <property name="text">
                 <string/>
                </property>
@@ -246,6 +270,9 @@
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonList">
+               <property name="toolTip">
+                <string>播放列表</string>
+               </property>
                <property name="text">
                 <string/>
                </property>

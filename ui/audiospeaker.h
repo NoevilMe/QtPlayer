@@ -14,8 +14,9 @@ public:
     AudioSpeakerImpl();
     ~AudioSpeakerImpl();
 
-    // 内部释放data
+    // 当前时间点
     double audioClock();
+    // 可用缓存空间
     int bytesFree();
 
 signals:
@@ -24,8 +25,10 @@ signals:
     void write(const char *data, int len, double clock);
 
 public slots:
+    // 随线程外部绑定，或者直接调用
     void slotStart();
     void slotStop();
+    // 内部绑定
     void slotPause();
     void slotResume();
     void slotWrite(const char *data, int len, double clock);
@@ -51,16 +54,22 @@ public:
     explicit AudioSpeaker(bool newThread = true);
     ~AudioSpeaker();
 
+    // 开始播放
     void start();
+    // 停止播放
     void stop();
-
+    // 暂停
     void pause();
+    // 恢复
     void resume();
-    void write(const char *data, int len, double clock);
 
-    // 内部释放data
-    double audioClock();
+    // 写入音频数据
+    void write(const char *data, int len, double clock);
+    // 当前可用缓存空间
     int bytesFree();
+
+    // 获取音频当前的时间点，double秒数
+    double audioClock();
 
 private:
     bool createThread;
