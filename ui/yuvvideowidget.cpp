@@ -20,6 +20,7 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
       textVBO(0),
       vao(0),
       program(nullptr),
+      transInitialized(false),
       display(true) {
 
     // 使用信号槽跨线程传递
@@ -52,6 +53,12 @@ void YuvVideoWidget::resetVideoSize(int width, int height) {
     }
 
     videoRatio = (float)videoWidth / videoHeight;
+
+    if (!transInitialized) {
+        qDebug() << QThread::currentThreadId() << "calcTransMatrix";
+        calcTransMatrix(this->width(), this->height());
+        transInitialized = true;
+    }
 }
 
 bool YuvVideoWidget::isSupportedFormat(int fmt) {
@@ -74,9 +81,12 @@ YuvVideoWidget::clear()
 
 信号槽机制会导致先前传递到UI的视频帧，可能会在videoFrame.reset()了之后才到达。
      */
-    qDebug() << QThread::currentThreadId() << "opengl clear()";
+    // qDebug() << QThread::currentThreadId() << "opengl clear()";
     displayEnable(false);
     videoFrame.reset();
+
+    // 下次播放视频仍然需要重新计算变换矩阵
+    transInitialized = false;
 
     // glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -88,9 +98,10 @@ void YuvVideoWidget::displayEnable(bool enable) { display = enable; }
 
 void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
     // qDebug() << QThread::currentThreadId() << "playVideoSlot";
-
-    if (!display)
+    if (!display) {
+        qDebug() << QThread::currentThreadId() << "do not display frame";
         return;
+    }
 
     videoFrame = frame;
 
@@ -198,13 +209,7 @@ void YuvVideoWidget::resizeGL(int w, int h) {
     // 设置视口
     glViewport(0, 0, w, h);
 
-    auto winRatio = (float)w / h;
-    trans.setToIdentity();
-    if (winRatio > videoRatio) {
-        trans.scale(videoRatio / winRatio, 1.0f, 1.0f);
-    } else {
-        trans.scale(1.0f, winRatio / videoRatio, 1.0f);
-    }
+    calcTransMatrix(w, h);
 }
 
 void YuvVideoWidget::paintGL() {
@@ -231,6 +236,20 @@ void YuvVideoWidget::paintGL() {
 
     glBindVertexArray(0);
     program->release();
+}
+
+void YuvVideoWidget::calcTransMatrix(int w, int h) {
+    if (h == 0) {
+        h = 1;
+    }
+
+    auto winRatio = (float)w / h;
+    trans.setToIdentity();
+    if (winRatio > videoRatio) {
+        trans.scale(videoRatio / winRatio, 1.0f, 1.0f);
+    } else {
+        trans.scale(1.0f, winRatio / videoRatio, 1.0f);
+    }
 }
 
 void YuvVideoWidget::initShader() {

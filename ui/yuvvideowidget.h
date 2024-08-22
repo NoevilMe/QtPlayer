@@ -44,6 +44,8 @@ protected:
     virtual void paintGL();
 
 private:
+    void calcTransMatrix(int w, int h);
+
     void initShader(); // 着色器
 
     void initVBO(); // Vertex Buffer Objects, VBO 管理顶点
@@ -74,6 +76,8 @@ private:
     QOpenGLShaderProgram *program; // 着色器程序容器
 
     QSharedPointer<VideoFrame> videoFrame;
+
+    bool transInitialized;
     bool display;
 
     //    QOpenGLVertexArrayObject vaoQuad;

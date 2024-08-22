@@ -62,9 +62,6 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
-
-
-
     )
 else()
     add_executable(${PROJECT_NAME}

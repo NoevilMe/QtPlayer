@@ -104,8 +104,6 @@ void PlayerForm::playAudio(const std::shared_ptr<std::string> &data,
 }
 
 void PlayerForm::playVideo(AVFrame *frame) {
-    qDebug() << QThread::currentThreadId() << "playVideo";
-
     if (!ui->openGLWidget->isSupportedFormat(frame->format)) {
         return;
     }
@@ -169,9 +167,6 @@ void PlayerForm::playVideo(AVFrame *frame) {
 #endif
     }
 
-    // 这个函数当前比较耗时，进入函数时候可能还没停止，但是这的时候播放器已经停止播放了。
-
-    qDebug() << QThread::currentThreadId() << "opengl playFrame";
     emit ui->openGLWidget->playFrame(videoFrame);
 }
 
