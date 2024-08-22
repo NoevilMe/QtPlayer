@@ -145,9 +145,9 @@ bool FFPlayer::Play() {
 
     // 播放之前应该设置重采样参数
     if (audio_player_) {
-        audio_player_->SetFrameCallback(std::bind(&FFPlayer::PlayAudioFrame,
-                                                  this, std::placeholders::_1,
-                                                  std::placeholders::_2));
+        audio_player_->SetFrameCallback(
+            std::bind(&FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
+                      std::placeholders::_2, std::placeholders::_3));
         audio_player_->set_resample_format(resample_fmt_);
     }
 
@@ -247,15 +247,13 @@ void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
                       frame->pts, clock, audio_clock, clock - audio_clock);
     }
 
-    video_frame_cb_(frame);
+    video_frame_cb_(frame, clock);
 }
 
-void FFPlayer::PlayAudioFrame(const std::shared_ptr<std::string> &data,
-                              double clock) {
+void FFPlayer::PlayAudioFrame(const char *data, int size, double clock) {
     if (audio_frame_cb_) {
-        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data->data(),
-                       data->length(), clock);
-        audio_frame_cb_(data, clock);
+        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data, size, clock);
+        audio_frame_cb_(data, size, clock);
     }
 }
 
@@ -389,9 +387,9 @@ bool FFPlayer::InitInputContext() {
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
                    !audio_player_) {
             audio_player_.reset(new AudioPlayer(i, stream));
-            audio_player_->SetFrameCallback(
-                std::bind(&FFPlayer::PlayAudioFrame, this,
-                          std::placeholders::_1, std::placeholders::_2));
+            audio_player_->SetFrameCallback(std::bind(
+                &FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
+                std::placeholders::_2, std::placeholders::_3));
             audio_player_->set_resample_format(resample_fmt_);
         }
     }
@@ -1426,13 +1424,10 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             logger_->debug("audio frame pts {}, clock {}", decoded_frame_->pts,
                            clock);
             if (frame_cb_) {
-                std::shared_ptr<std::string> audio_data(new std::string(
-                    (const char *)resample_buf, resample_frame_size));
-
-                logger_->debug("frame_cb_ {}, {}, {}",
-                               (void *)audio_data->data(), audio_data->length(),
-                               clock);
-                frame_cb_(audio_data, clock);
+                logger_->debug("frame_cb_ {}, {}, {}", (void *)resample_buf,
+                               resample_frame_size, clock);
+                frame_cb_((const char *)resample_buf, resample_frame_size,
+                          clock);
             }
             delete[] resample_buf;
 

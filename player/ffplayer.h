@@ -14,6 +14,9 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+using AudioFrameCallback = std::function<void(const char *, int, double)>;
+using VideoFrameCallback = std::function<void(AVFrame *, double)>;
+
 struct AvFunctionInterrupt {
     long long func_start_timestamp = 0;
     long long func_end_timestamp = 0;
@@ -91,13 +94,11 @@ public:
     // 停止播放
     void Stop();
 
-    void SetVideoFrameCallback(const std::function<void(AVFrame *)> &cb) {
+    void SetVideoFrameCallback(const VideoFrameCallback &cb) {
         video_frame_cb_ = cb;
     }
 
-    void SetAudioFrameCallback(
-        const std::function<void(const std::shared_ptr<std::string> &, double)>
-            &cb) {
+    void SetAudioFrameCallback(const AudioFrameCallback &cb) {
         audio_frame_cb_ = cb;
     }
 
@@ -111,7 +112,7 @@ public:
 
 protected:
     void PlayVideoFrame(AVFrame *frame, double clock);
-    void PlayAudioFrame(const std::shared_ptr<std::string> &data, double clock);
+    void PlayAudioFrame(const char *data, int size, double clock);
 
     bool ResampleFormatValid() const;
 
@@ -182,9 +183,8 @@ protected:
     std::atomic_bool running_;
 
     std::thread read_thread_;
-    std::function<void(AVFrame *)> video_frame_cb_;
-    std::function<void(const std::shared_ptr<std::string> &, double)>
-        audio_frame_cb_;
+    VideoFrameCallback video_frame_cb_;
+    AudioFrameCallback audio_frame_cb_;
     std::function<double()> audio_clock_cb_;
     std::function<void(void)> play_done_cb_;
     std::shared_ptr<spdlog::logger> logger_;
@@ -273,7 +273,7 @@ private:
     long long ts_sws_ = 0; // sws_scale
     long long ts_cb_ = 0;
 
-    std::function<void(AVFrame *, double)> frame_cb_;
+    VideoFrameCallback frame_cb_;
 };
 
 class AudioPlayer : public StreamPlayer {
@@ -293,11 +293,7 @@ public:
     bool InitSwrContext();
     void ResetSwrContext();
 
-    void SetFrameCallback(
-        const std::function<void(const std::shared_ptr<std::string> &, double)>
-            &cb) {
-        frame_cb_ = cb;
-    }
+    void SetFrameCallback(const AudioFrameCallback &cb) { frame_cb_ = cb; }
 
 private:
     bool ResampleFormatValid() const;
@@ -306,7 +302,7 @@ private:
     AudioFormat resample_fmt_;
     SwrContext *swr_ctx_ = nullptr;
 
-    std::function<void(const std::shared_ptr<std::string> &, double)> frame_cb_;
+    AudioFrameCallback frame_cb_;
 };
 
 const AVCodecHWConfig *AvUtilGetHwConfig(const AVCodec *codec,

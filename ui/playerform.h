@@ -26,8 +26,8 @@ public:
     ~PlayerForm();
 
     bool openMedia(MediaSource media);
-    void playAudio(const std::shared_ptr<std::string> &data, double clock);
-    void playVideo(AVFrame *frame);
+    void playAudio(const char *data, int size, double clock);
+    void playVideo(AVFrame *frame, double clock);
 
     void openDialog();
 

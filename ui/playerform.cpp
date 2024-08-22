@@ -67,16 +67,17 @@ bool PlayerForm::openMedia(MediaSource media) {
         deviceFmt.sample_fmt = AudioSampleFormat::Int16;
         player->SetAudioDeviceFormat(deviceFmt);
 
-        player->SetAudioFrameCallback(std::bind(&PlayerForm::playAudio, this,
-                                                std::placeholders::_1,
-                                                std::placeholders::_2));
+        player->SetAudioFrameCallback(
+            std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
+                      std::placeholders::_2, std::placeholders::_3));
         player->SetAudioClockCallback([=]() { return speaker->audioClock(); });
         speaker->start();
         qDebug() << "speaker" << QThread::currentThreadId();
     }
 
-    player->SetVideoFrameCallback(
-        std::bind(&PlayerForm::playVideo, this, std::placeholders::_1));
+    player->SetVideoFrameCallback(std::bind(&PlayerForm::playVideo, this,
+                                            std::placeholders::_1,
+                                            std::placeholders::_2));
 
     player->SetPlayDoneCallback([=]() {
         // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
@@ -95,15 +96,15 @@ bool PlayerForm::openMedia(MediaSource media) {
     }
 }
 
-void PlayerForm::playAudio(const std::shared_ptr<std::string> &data,
-                           double clock) {
+void PlayerForm::playAudio(const char *data, int size, double clock) {
     if (!speaker)
         return;
 
-    speaker->write(data, clock);
+    std::shared_ptr<std::string> audio_data(new std::string(data, size));
+    speaker->write(audio_data, clock);
 }
 
-void PlayerForm::playVideo(AVFrame *frame) {
+void PlayerForm::playVideo(AVFrame *frame, double clock) {
     if (!ui->openGLWidget->isSupportedFormat(frame->format)) {
         return;
     }
