@@ -32,14 +32,14 @@ public:
     void openDialog();
 
 signals:
-    void playDoneSignal();
+    void playDone();
 
 private slots:
     void on_pushButtonList_toggled(bool checked);
     void on_pushButtonFullScreen_toggled(bool checked);
 
-    void playDoneSlot();
-    void timerTimeoutSlot();
+    void slotPlayDone();
+    void slotTimerTimeout();
 
     // 播放、暂停
     void on_pushButtonPlay_clicked(bool checked);

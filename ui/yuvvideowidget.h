@@ -10,6 +10,8 @@
 #include <QOpenGLWidget>
 #include <QSharedPointer>
 
+#include <atomic>
+
 /*
 QOpenGLExtraFunctions可以提供VAO相关函数
 */
@@ -24,19 +26,18 @@ public:
 
     void paintAVFrame(AVFrame *frame);
 
-    void resetVideoSize(int width, int height);
+    void adjustVideoSize(int width, int height);
 
     QList<int> supportedFormats() { return formats; }
     bool isSupportedFormat(int fmt);
 
     void clear();
-    void displayEnable(bool enable);
 
 signals:
     void playFrame(const QSharedPointer<VideoFrame> &frame);
 
 private slots:
-    void playVideoSlot(const QSharedPointer<VideoFrame> &frame);
+    void slotPlayFrame(const QSharedPointer<VideoFrame> &frame);
 
 protected:
     virtual void initializeGL();
@@ -78,7 +79,6 @@ private:
     QSharedPointer<VideoFrame> videoFrame;
 
     bool transInitialized;
-    bool display;
 
     //    QOpenGLVertexArrayObject vaoQuad;
     //    QOpenGLBuffer vboQuad;

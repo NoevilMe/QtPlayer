@@ -98,7 +98,7 @@
            <item>
             <layout class="QHBoxLayout" name="horizontalLayoutSlider">
              <item>
-              <widget class="QSlider" name="horizontalSliderProgress">
+              <widget class="QSlider" name="horSliderProgress">
                <property name="maximumSize">
                 <size>
                  <width>16777215</width>

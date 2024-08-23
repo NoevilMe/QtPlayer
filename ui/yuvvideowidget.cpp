@@ -1,6 +1,5 @@
 #include "yuvvideowidget.h"
 #include "av_def.h"
-#include "util/util.h"
 
 #include <QThread>
 #include <QTimer>
@@ -20,12 +19,11 @@ YuvVideoWidget::YuvVideoWidget(QWidget *parent)
       textVBO(0),
       vao(0),
       program(nullptr),
-      transInitialized(false),
-      display(true) {
+      transInitialized(false) {
 
     // 使用信号槽跨线程传递
     connect(this, &YuvVideoWidget::playFrame, this,
-            &YuvVideoWidget::playVideoSlot);
+            &YuvVideoWidget::slotPlayFrame);
 }
 
 YuvVideoWidget::~YuvVideoWidget() {
@@ -40,7 +38,7 @@ YuvVideoWidget::~YuvVideoWidget() {
     }
 }
 
-void YuvVideoWidget::resetVideoSize(int width, int height) {
+void YuvVideoWidget::adjustVideoSize(int width, int height) {
     if (videoWidth == width && videoHeight == height) {
         return;
     }
@@ -82,7 +80,6 @@ YuvVideoWidget::clear()
 信号槽机制会导致先前传递到UI的视频帧，可能会在videoFrame.reset()了之后才到达。
      */
     // qDebug() << QThread::currentThreadId() << "opengl clear()";
-    displayEnable(false);
     videoFrame.reset();
 
     // 下次播放视频仍然需要重新计算变换矩阵
@@ -94,14 +91,8 @@ YuvVideoWidget::clear()
     update();
 }
 
-void YuvVideoWidget::displayEnable(bool enable) { display = enable; }
-
-void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
-    // qDebug() << QThread::currentThreadId() << "playVideoSlot";
-    if (!display) {
-        qDebug() << QThread::currentThreadId() << "do not display frame";
-        return;
-    }
+void YuvVideoWidget::slotPlayFrame(const QSharedPointer<VideoFrame> &frame) {
+    // qDebug() << QThread::currentThreadId() << "slotPlayFrame";
 
     videoFrame = frame;
 
@@ -113,7 +104,7 @@ void YuvVideoWidget::playVideoSlot(const QSharedPointer<VideoFrame> &frame) {
         return;
     }
 
-    resetVideoSize(frame->width, frame->height);
+    adjustVideoSize(frame->width, frame->height);
 
     update();
 }
@@ -129,7 +120,7 @@ void YuvVideoWidget::paintAVFrame(AVFrame *frame) {
 
     // https://blog.csdn.net/chinabinlang/article/details/7804808
     // resetVideoSize(frame->linesize[0], frame->height);
-    resetVideoSize(frame->width, frame->height);
+    adjustVideoSize(frame->width, frame->height);
 
     // qDebug() << "format" << frame->format << "width " << frame->width
     //          << ", height " << frame->height << ", line size0 "

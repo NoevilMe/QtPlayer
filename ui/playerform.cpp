@@ -19,10 +19,12 @@ PlayerForm::PlayerForm(QWidget *parent)
 
     timerProgress = new QTimer(this); // 定时器-获取当前视频时间
     connect(timerProgress, &QTimer::timeout, this,
-            &PlayerForm::timerTimeoutSlot);
+            &PlayerForm::slotTimerTimeout);
     timerProgress->setInterval(500);
 
-    connect(this, &PlayerForm::playDoneSignal, this, &PlayerForm::playDoneSlot);
+    // 使用队列模式，保证即使是UI线程触发playDone信号，也能按顺序最后到达，重置控件
+    connect(this, &PlayerForm::playDone, this, &PlayerForm::slotPlayDone,
+            Qt::QueuedConnection);
 
     qDebug() << "PlayerForm" << QThread::currentThreadId();
 }
@@ -81,7 +83,8 @@ bool PlayerForm::openMedia(MediaSource media) {
 
     player->SetPlayDoneCallback([=]() {
         // 该函数在播放器内部线程中执行，不能直接reset，需要借助信号槽处理
-        emit this->playDoneSignal();
+        qDebug() << QThread::currentThreadId() << "emit playDone";
+        emit this->playDone();
     });
 
     timerProgress->start();
@@ -168,6 +171,7 @@ void PlayerForm::playVideo(AVFrame *frame, double clock) {
 #endif
     }
 
+    // qDebug() << QThread::currentThreadId() << "playVideo emit playFrame";
     emit ui->openGLWidget->playFrame(videoFrame);
 }
 
@@ -209,7 +213,7 @@ void PlayerForm::listOutputAudioDevices() {
 void PlayerForm::onTotalSeconds(double seconds) {
 
     int sec = (int)seconds;
-    ui->horizontalSliderProgress->setRange(0, sec);
+    ui->horSliderProgress->setRange(0, sec);
 
     QString totalTime;
     QString hStr = QString("0%1").arg(sec / 3600);
@@ -314,20 +318,23 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
     // }
 }
 
-void PlayerForm::playDoneSlot() {
-    qDebug() << QThread::currentThreadId() << "playDoneSlot";
+void PlayerForm::slotPlayDone() {
+    qDebug() << QThread::currentThreadId() << "slotPlayDone";
     player.reset();
     timerProgress->stop();
+    ui->horSliderProgress->setValue(0);
     ui->pushButtonPlay->setChecked(false);
+
+    ui->openGLWidget->clear();
 }
 
-void PlayerForm::timerTimeoutSlot() {
+void PlayerForm::slotTimerTimeout() {
     if (QObject::sender() == timerProgress) {
         if (!player)
             return;
 
         qint64 Sec = player->GetClock();
-        ui->horizontalSliderProgress->setValue(Sec);
+        ui->horSliderProgress->setValue(Sec);
 
         QString curTime;
         QString hStr = QString("0%1").arg(Sec / 3600);
@@ -373,8 +380,6 @@ void PlayerForm::loadIcons() {
 }
 
 void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
-    ui->openGLWidget->displayEnable(true);
-
     if (!player) {
         openDialog();
         return;
@@ -392,7 +397,7 @@ void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
 void PlayerForm::on_pushButtonStop_clicked() {
     stopPlayer();
     stopSpeaker();
-    emit playDoneSignal();
 
-    ui->openGLWidget->clear();
+    qDebug() << QThread::currentThreadId() << "emit playDone";
+    emit playDone();
 }
