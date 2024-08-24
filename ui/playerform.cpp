@@ -10,6 +10,131 @@
 #include <QGuiApplication>
 #include <QScreen>
 
+namespace qtav {
+
+static int AUDIO_SAMPLING_RATES[] = {
+    96000, // 0
+    88200, // 1
+    64000, // 2
+    48000, // 3
+    44100, // 4
+    32000, // 5
+    24000, // 6
+    22050, // 7
+    16000, // 8
+    12000, // 9
+    11025, // 10
+    8000,  // 11
+    7350,  // 12
+    -1,    // 13
+    -1,    // 14
+    -1,    // 15
+};
+
+bool IsValidSampleRate(int rate) {
+    if (rate < 0)
+        return true;
+
+    for (int i = 0;
+         i < sizeof(AUDIO_SAMPLING_RATES) / sizeof(AUDIO_SAMPLING_RATES[0]);
+         ++i) {
+        if (rate == AUDIO_SAMPLING_RATES[i]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+    enum SampleFormat : quint16 {
+        Unknown,
+        UInt8,
+        Int16,
+        Int32,
+        Float,
+        NSampleFormats
+    };
+
+enum AVSampleFormat {
+AV_SAMPLE_FMT_NONE = -1,
+AV_SAMPLE_FMT_U8,          ///< unsigned 8 bits
+AV_SAMPLE_FMT_S16,         ///< signed 16 bits
+AV_SAMPLE_FMT_S32,         ///< signed 32 bits
+AV_SAMPLE_FMT_FLT,         ///< float
+AV_SAMPLE_FMT_DBL,         ///< double
+
+ AV_SAMPLE_FMT_U8P,         ///< unsigned 8 bits, planar
+ AV_SAMPLE_FMT_S16P,        ///< signed 16 bits, planar
+ AV_SAMPLE_FMT_S32P,        ///< signed 32 bits, planar
+ AV_SAMPLE_FMT_FLTP,        ///< float, planar
+ AV_SAMPLE_FMT_DBLP,        ///< double, planar
+ AV_SAMPLE_FMT_S64,         ///< signed 64 bits
+ AV_SAMPLE_FMT_S64P,        ///< signed 64 bits, planar
+
+ AV_SAMPLE_FMT_NB           ///< Number of sample formats. DO NOT USE if linking
+dynamically
+};
+ */
+
+QAudioFormat::SampleFormat AvSampleFormatToQtSampleFormat(AVSampleFormat fmt) {
+    QAudioFormat::SampleFormat qt_fmt = QAudioFormat::Unknown;
+    switch (fmt) {
+    case AV_SAMPLE_FMT_U8:
+        qt_fmt = QAudioFormat::UInt8;
+        break;
+    case AV_SAMPLE_FMT_S16:
+        qt_fmt = QAudioFormat::Int16; // 输出的采样格式。绝⼤部分声卡⽀持
+        break;
+    case AV_SAMPLE_FMT_S32:
+        qt_fmt = QAudioFormat::Int32;
+        break;
+    case AV_SAMPLE_FMT_FLT:
+        qt_fmt = QAudioFormat::Float;
+        break;
+    default:
+        qt_fmt = QAudioFormat::Unknown;
+        break;
+    }
+
+    return qt_fmt;
+}
+
+AVSampleFormat QtSampleFormatToAvSampleFormat(QAudioFormat::SampleFormat fmt) {
+    AVSampleFormat av_fmt = AV_SAMPLE_FMT_NONE;
+    switch (fmt) {
+    case QAudioFormat::UInt8:
+        av_fmt = AV_SAMPLE_FMT_U8;
+        break;
+    case QAudioFormat::Int16:
+        av_fmt = AV_SAMPLE_FMT_S16; // 输出的采样格式。绝⼤部分声卡⽀持
+        break;
+    case QAudioFormat::Int32:
+        av_fmt = AV_SAMPLE_FMT_S32;
+        break;
+    case QAudioFormat::Float:
+        av_fmt = AV_SAMPLE_FMT_FLT;
+        break;
+    default:
+        av_fmt = AV_SAMPLE_FMT_NONE;
+        break;
+    }
+
+    return av_fmt;
+}
+
+bool InSampleFormatList(QAudioFormat::SampleFormat fmt,
+                        const QList<QAudioFormat::SampleFormat> &lst) {
+    for (auto &f : lst) {
+        if (f == fmt)
+            return true;
+    }
+
+    return false;
+}
+
+} // namespace qtav
+
 PlayerForm::PlayerForm(QWidget *parent)
     : QWidget(parent), ui(new Ui::PlayerForm) {
     ui->setupUi(this);
@@ -40,7 +165,87 @@ PlayerForm::~PlayerForm() {
     delete ui;
 }
 
+bool PlayerForm::NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out) {
+    // 用于协商音频格式与音频设备。
+    // return 是否需要重采样。支持默认格式，否则需要重采样
+
+    if (!in || !out)
+        return false;
+
+    bool resample = false;
+
+    // 回调这个函数说明有音频, 就创建音频设备
+    QAudioDevice audioDevice = AudioSpeaker::getDevice();
+
+    QAudioFormat preferFmt = audioDevice.preferredFormat();
+
+    QAudioFormat::SampleFormat selectSmplFmt = QAudioFormat::Unknown;
+    QAudioFormat::SampleFormat smplFmt =
+        qtav::AvSampleFormatToQtSampleFormat((AVSampleFormat)in->sample_fmt);
+    if (smplFmt ==
+        QAudioFormat::Unknown) { // 不认识的格式，例如AV_SAMPLE_FMT_FLTP.
+                                 // 需要重采样
+        resample = true;
+        selectSmplFmt = preferFmt.sampleFormat();
+    } else {
+        auto supportedFmts = audioDevice.supportedSampleFormats();
+        if (qtav::InSampleFormatList(smplFmt, supportedFmts)) {
+            selectSmplFmt = smplFmt;
+        } else {
+            resample = true;
+            selectSmplFmt = preferFmt.sampleFormat();
+        }
+    }
+    out->sample_fmt = qtav::QtSampleFormatToAvSampleFormat(selectSmplFmt);
+
+    // sample rate
+    if (!qtav::IsValidSampleRate(in->sample_rate)) {
+        out->sample_rate = preferFmt.sampleRate();
+        resample = true;
+    } else if (in->sample_rate >= audioDevice.minimumSampleRate() &&
+               in->sample_rate <= audioDevice.maximumSampleRate()) {
+        out->sample_rate = in->sample_rate;
+    } else {
+        out->sample_rate = preferFmt.sampleRate();
+        resample = true;
+    }
+
+    // channel count
+    if (in->channel_count >= audioDevice.minimumChannelCount() &&
+        in->channel_count <= audioDevice.maximumChannelCount()) {
+        out->channel_count = in->channel_count;
+    } else {
+        out->channel_count = preferFmt.channelCount();
+        resample = true;
+    }
+    qDebug() << "NegotiateAudioFormat resample" << resample << ", sample fmt"
+             << qtav::AvSampleFormatToQtSampleFormat(
+                    (AVSampleFormat)out->sample_fmt)
+             << ", sample rate" << out->sample_rate << ", channel"
+             << out->channel_count;
+
+    // speaker 前面应该创建
+    if (speaker) {
+        QAudioFormat applyFmt;
+        applyFmt.setSampleFormat(qtav::AvSampleFormatToQtSampleFormat(
+            (AVSampleFormat)out->sample_fmt));
+        applyFmt.setSampleRate(out->sample_rate);
+        applyFmt.setChannelCount(out->channel_count);
+
+        qDebug() << "audio device" << audioDevice.description() << ", format"
+                 << applyFmt;
+
+        speaker->start(audioDevice, applyFmt);
+        qDebug() << QThread::currentThreadId() << "start speaker";
+    }
+
+    return resample;
+}
+
 bool PlayerForm::openMedia(MediaSource media) {
+
+    AudioSpeaker::getDevice();
+
     stopPlayer();
     stopSpeaker();
 
@@ -63,18 +268,13 @@ bool PlayerForm::openMedia(MediaSource media) {
 
         speaker.reset(new AudioSpeaker(true));
 
-        AudioDeviceFormat deviceFmt;
-        deviceFmt.channel_count = 2;
-        deviceFmt.sample_rate = 44100;
-        deviceFmt.sample_fmt = AudioSampleFormat::Int16;
-        player->SetAudioDeviceFormat(deviceFmt);
-
         player->SetAudioFrameCallback(
             std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
                       std::placeholders::_2, std::placeholders::_3));
+        player->SetNegotiateAudioFormatCallback(
+            std::bind(&PlayerForm::NegotiateAudioFormat, this,
+                      std::placeholders::_1, std::placeholders::_2));
         player->SetAudioClockCallback([=]() { return speaker->audioClock(); });
-        speaker->start();
-        qDebug() << "speaker" << QThread::currentThreadId();
     }
 
     player->SetVideoFrameCallback(std::bind(&PlayerForm::playVideo, this,
@@ -102,6 +302,9 @@ bool PlayerForm::openMedia(MediaSource media) {
 void PlayerForm::playAudio(const char *data, int size, double clock) {
     if (!speaker)
         return;
+
+    qDebug() << QThread::currentThreadId() << util::TimeMilliseconds()
+             << "playAudio callback" << clock << ", size" << size;
 
     std::shared_ptr<std::string> audio_data(new std::string(data, size));
     speaker->write(audio_data, clock);

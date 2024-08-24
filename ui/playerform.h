@@ -28,6 +28,7 @@ public:
     bool openMedia(MediaSource media);
     void playAudio(const char *data, int size, double clock);
     void playVideo(AVFrame *frame, double clock);
+    bool NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out);
 
     void openDialog();
 

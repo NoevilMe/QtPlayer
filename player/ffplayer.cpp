@@ -137,18 +137,36 @@ bool FFPlayer::Play() {
         return false;
     }
 
-    if (video_player_) {
-        video_player_->SetFrameCallback(std::bind(&FFPlayer::PlayVideoFrame,
-                                                  this, std::placeholders::_1,
-                                                  std::placeholders::_2));
-    }
+    // if (video_player_) {
+    //     video_player_->SetFrameCallback(std::bind(&FFPlayer::PlayVideoFrame,
+    //                                               this,
+    //                                               std::placeholders::_1,
+    //                                               std::placeholders::_2));
+    // }
 
     // 播放之前应该设置重采样参数
     if (audio_player_) {
-        audio_player_->SetFrameCallback(
-            std::bind(&FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
-                      std::placeholders::_2, std::placeholders::_3));
-        audio_player_->set_resample_format(resample_fmt_);
+        // audio_player_->SetFrameCallback(
+        //     std::bind(&FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
+        //               std::placeholders::_2, std::placeholders::_3));
+
+        if (!nego_audio_format_cb_) {
+            logger_->error("Negotiate audio format callback is not set");
+            return false;
+        }
+
+        auto cpar = audio_player_->CodecPar();
+
+        AudioFormat in{cpar->format, cpar->sample_rate,
+                       cpar->ch_layout.nb_channels};
+        AudioFormat out;
+        if (nego_audio_format_cb_(&in, &out)) {
+            logger_->info(
+                "negotiated audio sample fmt {}, sample rate {}, channels {}",
+                avutil::GetSampleFmtName((AVSampleFormat)out.sample_fmt),
+                out.sample_rate, out.channel_count);
+            audio_player_->set_resample_format(out);
+        }
     }
 
     if (!InitInputCodec()) {
@@ -207,30 +225,6 @@ void FFPlayer::SetMediaSource(MediaSource media) {
     media_source_ = std::move(media);
 }
 
-void FFPlayer::SetAudioDeviceFormat(AudioDeviceFormat fmt) {
-    resample_fmt_.sample_rate = fmt.sample_rate;
-    resample_fmt_.channel_count = fmt.channel_count;
-
-    switch (fmt.sample_fmt) {
-    case AudioSampleFormat::UInt8:
-        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_U8;
-        break;
-    case AudioSampleFormat::Int16:
-        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
-        break;
-    case AudioSampleFormat::Int32:
-        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S32;
-        break;
-    case AudioSampleFormat::Float:
-        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_FLT;
-        break;
-    default:
-        // 输出的采样格式。绝⼤部分声卡⽀持
-        resample_fmt_.sample_fmt = AV_SAMPLE_FMT_S16;
-        break;
-    }
-}
-
 void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
     auto audio_clock = audio_clock_cb_();
     auto diff = clock - audio_clock;
@@ -255,11 +249,6 @@ void FFPlayer::PlayAudioFrame(const char *data, int size, double clock) {
         logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data, size, clock);
         audio_frame_cb_(data, size, clock);
     }
-}
-
-bool FFPlayer::ResampleFormatValid() const {
-    return resample_fmt_.channel_count > 0 && resample_fmt_.sample_rate > 0 &&
-           resample_fmt_.sample_fmt != AV_SAMPLE_FMT_NONE;
 }
 
 // https://www.cnblogs.com/feiyangqingyun/p/16875945.html
@@ -386,11 +375,11 @@ bool FFPlayer::InitInputContext() {
 
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
                    !audio_player_) {
+
             audio_player_.reset(new AudioPlayer(i, stream));
             audio_player_->SetFrameCallback(std::bind(
                 &FFPlayer::PlayAudioFrame, this, std::placeholders::_1,
                 std::placeholders::_2, std::placeholders::_3));
-            audio_player_->set_resample_format(resample_fmt_);
         }
     }
 
@@ -1380,7 +1369,7 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             // 计算buffer容量
             auto resample_buf_size = av_samples_get_buffer_size(
                 nullptr, resample_fmt_.channel_count, out_count,
-                resample_fmt_.sample_fmt, 0);
+                (AVSampleFormat)resample_fmt_.sample_fmt, 0);
             logger_->trace(
                 "out count {}, av_samples_get_buffer_size out size {} ",
                 out_count, resample_buf_size);
@@ -1417,7 +1406,8 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
 
             int resample_frame_size =
                 resample_nb_samples * resample_fmt_.channel_count *
-                av_get_bytes_per_sample(resample_fmt_.sample_fmt);
+                av_get_bytes_per_sample(
+                    (AVSampleFormat)resample_fmt_.sample_fmt);
             logger_->trace("resample frame size {}", resample_frame_size);
 
             double clock = decoded_frame_->pts * av_q2d(stream_->time_base);
@@ -1436,7 +1426,7 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
 
             int sleeptime =
                 frame_interval * 1000000 *
-                0.9; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
+                0.7; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
 
             logger_->trace("frame_interval {}, sleep {}", frame_interval,
                            sleeptime);
@@ -1487,10 +1477,15 @@ bool AudioPlayer::InitSwrContext() {
     if (!decode_ctx_)
         return true;
 
-    if (!ResampleFormatValid()) {
+    if (!ValidResampleFormat()) {
         logger_->warn("resample format is not valid");
         return true;
     }
+
+    logger_->info(
+        "resample fmt {}, sample rate {}, channels {}",
+        avutil::GetSampleFmtName((AVSampleFormat)resample_fmt_.sample_fmt),
+        resample_fmt_.sample_rate, resample_fmt_.channel_count);
 
     // 创建 SwrContext 对象
     AVChannelLayout out_ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 输出的layout,
@@ -1499,11 +1494,12 @@ bool AudioPlayer::InitSwrContext() {
     AVChannelLayout in_ch_layout;
     av_channel_layout_copy(&in_ch_layout, &decode_ctx_->ch_layout);
 
-    int ret = swr_alloc_set_opts2(&swr_ctx_, &out_ch_layout,
-                                  resample_fmt_.sample_fmt, // 输出的采样格式。
-                                  resample_fmt_.sample_rate, // 输出采样率
-                                  &in_ch_layout, decode_ctx_->sample_fmt,
-                                  decode_ctx_->sample_rate, 0, nullptr);
+    int ret = swr_alloc_set_opts2(
+        &swr_ctx_, &out_ch_layout,
+        (AVSampleFormat)resample_fmt_.sample_fmt, // 输出的采样格式。
+        resample_fmt_.sample_rate,                // 输出采样率
+        &in_ch_layout, decode_ctx_->sample_fmt, decode_ctx_->sample_rate, 0,
+        nullptr);
     if (ret < 0) {
         logger_->error("swr_alloc_set_opts2 fail, {}",
                        avutil::ErrorString(ret));
@@ -1541,7 +1537,7 @@ void AudioPlayer::ResetSwrContext() {
     }
 }
 
-bool AudioPlayer::ResampleFormatValid() const {
+bool AudioPlayer::ValidResampleFormat() const {
     return resample_fmt_.channel_count > 0 && resample_fmt_.sample_rate > 0 &&
            resample_fmt_.sample_fmt != AV_SAMPLE_FMT_NONE;
 }

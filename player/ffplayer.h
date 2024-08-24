@@ -14,9 +14,6 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-using AudioFrameCallback = std::function<void(const char *, int, double)>;
-using VideoFrameCallback = std::function<void(AVFrame *, double)>;
-
 struct AvFunctionInterrupt {
     long long func_start_timestamp = 0;
     long long func_end_timestamp = 0;
@@ -36,7 +33,7 @@ struct MediaSource {
 };
 
 struct AudioFormat {
-    AVSampleFormat sample_fmt = AV_SAMPLE_FMT_NONE;
+    int sample_fmt = -1; // -1， AV_SAMPLE_FMT_NONE
     int sample_rate = 0;
     int channel_count = 0;
 };
@@ -48,6 +45,13 @@ struct VideoFormat {
     AVRational sample_aspect_ratio = {0, 0};
     AVColorPrimaries color_primaries = AVCOL_PRI_UNSPECIFIED;
 };
+
+using AudioFrameCallback = std::function<void(const char *, int, double)>;
+using VideoFrameCallback = std::function<void(AVFrame *, double)>;
+using NegotiateAudioFormatCallback =
+    std::function<bool(const AudioFormat *, AudioFormat *)>;
+using AudioClockCallback = std::function<double()>;
+using PlayDoneCallback = std::function<void(void)>;
 
 class VideoPlayer;
 class AudioPlayer;
@@ -79,10 +83,6 @@ public:
     // 获取已经播放的时间
     double GetClock();
 
-    // 设置音频重采样参数，Play前
-    // void SetAudioResampleFormat(AudioFormat fmt);
-    void SetAudioDeviceFormat(AudioDeviceFormat fmt);
-
     // 再播放
     bool Play();
     // 是否播放
@@ -102,13 +102,16 @@ public:
         audio_frame_cb_ = cb;
     }
 
-    void SetAudioClockCallback(const std::function<double()> &cb) {
+    void SetAudioClockCallback(const AudioClockCallback &cb) {
         audio_clock_cb_ = cb;
     }
 
-    void SetPlayDoneCallback(const std::function<void(void)> &cb) {
-        play_done_cb_ = cb;
+    void
+    SetNegotiateAudioFormatCallback(const NegotiateAudioFormatCallback &cb) {
+        nego_audio_format_cb_ = cb;
     }
+
+    void SetPlayDoneCallback(const PlayDoneCallback &cb) { play_done_cb_ = cb; }
 
 protected:
     void PlayVideoFrame(AVFrame *frame, double clock);
@@ -150,7 +153,6 @@ protected:
 
 protected:
     MediaSource media_source_;
-    AudioFormat resample_fmt_;
 
     bool is_open_ = false;
 
@@ -185,8 +187,9 @@ protected:
     std::thread read_thread_;
     VideoFrameCallback video_frame_cb_;
     AudioFrameCallback audio_frame_cb_;
-    std::function<double()> audio_clock_cb_;
-    std::function<void(void)> play_done_cb_;
+    AudioClockCallback audio_clock_cb_;
+    NegotiateAudioFormatCallback nego_audio_format_cb_;
+    PlayDoneCallback play_done_cb_;
     std::shared_ptr<spdlog::logger> logger_;
 };
 
@@ -196,6 +199,8 @@ public:
     virtual ~StreamPlayer();
 
     int index() const { return index_; }
+    AVStream *stream() const { return stream_; }
+
     AVCodecID CodecID() const;
     AVCodecParameters *CodecPar() const;
     // 时间基，只能从流中读取。解码器的时间不能用于计算clock。
@@ -296,7 +301,7 @@ public:
     void SetFrameCallback(const AudioFrameCallback &cb) { frame_cb_ = cb; }
 
 private:
-    bool ResampleFormatValid() const;
+    bool ValidResampleFormat() const;
 
 private:
     AudioFormat resample_fmt_;

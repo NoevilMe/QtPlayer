@@ -11,7 +11,7 @@
 class AudioSpeakerImpl : public QObject {
     Q_OBJECT
 public:
-    AudioSpeakerImpl();
+    AudioSpeakerImpl(QAudioDevice dev, QAudioFormat fmt);
     ~AudioSpeakerImpl();
 
     // 当前时间点
@@ -39,13 +39,14 @@ public slots:
     void handleStateChanged(QAudio::State newState);
 
 private:
-    QAudioFormat format_;
-    long long buffer_size_;
+    QAudioDevice device;
+    QAudioFormat format;
+    long long bufferSize;
 
-    double queued_clock_;
+    double queuedClock;
 
-    QScopedPointer<QAudioSink> audio_sink_;
-    QIODevice *audio_device_ = nullptr;
+    QScopedPointer<QAudioSink> audioSink;
+    QIODevice *audioDevice = nullptr;
 };
 
 class AudioSpeaker : public QObject {
@@ -54,8 +55,10 @@ public:
     explicit AudioSpeaker(bool newThread = true);
     ~AudioSpeaker();
 
+    static QAudioDevice getDevice(const QString &desc = QString());
+
     // 开始播放
-    void start();
+    void start(QAudioDevice dev, QAudioFormat fmt);
     // 停止播放
     void stop();
     // 暂停
