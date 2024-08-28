@@ -41,6 +41,8 @@ set(PROJECT_SOURCES
         ui/openmediadialog.h
         ui/openmediadialog.cpp
         ui/openmediadialog.ui
+        ui/volumeslider.cpp
+        ui/volumeslider.h
         ui/yuvvideowidget.cpp
         ui/yuvvideowidget.h
         ui/audiospeaker.h

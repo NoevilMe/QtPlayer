@@ -7,6 +7,7 @@
 #include "av_def.h"
 #include "player/ffplayer.h"
 #include "util/iconhelper.h"
+#include "volumeslider.h"
 
 #include <QScopedPointer>
 
@@ -45,11 +46,14 @@ private slots:
 
     void slotPlayDone();
     void slotTimerTimeout();
+    void slotVolumeChanged(int value);
 
     // 播放、暂停
     void on_pushButtonPlay_clicked(bool checked);
     // 停止
     void on_pushButtonStop_clicked();
+
+    void on_pushButtonVolume_clicked(bool checked);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -67,7 +71,13 @@ private:
     void pauseSpeaker();
     void resumeSpeaker();
 
-    QString formatSeconds(qint64 seconds, bool longFmt);
+    void initContext();
+    void clearContext();
+
+    void setVolumeIcon(bool mute);
+
+    QString formatTimestamp(int seconds, bool longFmt);
+    void clearTimestamp();
 
 private:
     Ui::PlayerForm *ui;
@@ -81,10 +91,16 @@ private:
 
     QTimer *timerProgress; // 定时器-获取当前视频时间
 
+    VolumeSlider *volumeSlider = nullptr;
+    int volume = 0;
+
     std::function<void(const QString &)> windowTitleCb;
 
     std::unique_ptr<AudioSpeaker> speaker;
-
     std::unique_ptr<FFPlayer> player;
+
+    // QWidget interface
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
 };
 #endif // MAINWINDOW_H

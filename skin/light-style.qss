@@ -254,6 +254,10 @@ QPushButton#pushButtonVolume{
 image:url(:/images/Volume.png);
 }
 
+QPushButton#pushButtonVolume:checked{
+image:url(:/images/Volume4.png);
+}
+
 
 QPushButton#pushButtonCircle{
 image:url(:/images/Circle.png);

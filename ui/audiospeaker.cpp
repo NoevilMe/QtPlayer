@@ -6,7 +6,6 @@
 #include <QMutexLocker>
 #include <QThread>
 
-
 #define AUDIOSPEAKER_BUFFER_SIZE 18000
 
 AudioSpeakerImpl::AudioSpeakerImpl(QAudioDevice dev, QAudioFormat fmt)
@@ -18,6 +17,8 @@ AudioSpeakerImpl::AudioSpeakerImpl(QAudioDevice dev, QAudioFormat fmt)
                      &AudioSpeakerImpl::slotPause);
     QObject::connect(this, &AudioSpeakerImpl::resume, this,
                      &AudioSpeakerImpl::slotResume);
+    QObject::connect(this, &AudioSpeakerImpl::setVolume, this,
+                     &AudioSpeakerImpl::slogSetVolume);
 }
 
 AudioSpeakerImpl::~AudioSpeakerImpl() {
@@ -100,6 +101,20 @@ void AudioSpeakerImpl::slotWrite(const std::shared_ptr<std::string> &data,
              << "queued frame clock" << clock << ", audio clock" << audioClock()
              << ", size" << data->size()
              << ", bytes free:" << audioSink->bytesFree();
+}
+
+void AudioSpeakerImpl::slogSetVolume(int vol) {
+    if (!audioSink)
+        return;
+
+    if (vol <= 0) {
+        audioSink->setVolume(0.0f);
+    } else if (vol >= 100) {
+        audioSink->setVolume(1.0f);
+    } else {
+        double volume = (double)vol / 100;
+        audioSink->setVolume(volume);
+    }
 }
 
 QAudioDevice AudioSpeakerImpl::DefaultDevice() {
@@ -278,6 +293,12 @@ double AudioSpeaker::audioClock() {
         return impl->audioClock();
     } else {
         return 0;
+    }
+}
+
+void AudioSpeaker::setVolume(int vol) {
+    if (impl) {
+        emit impl->setVolume(vol);
     }
 }
 

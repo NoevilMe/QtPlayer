@@ -23,6 +23,8 @@ signals:
     void pause();
     void resume();
     void write(const std::shared_ptr<std::string> &data, double clock);
+    // 0 - 100
+    void setVolume(int vol);
 
 public slots:
     // 随线程外部绑定，或者直接调用
@@ -32,6 +34,7 @@ public slots:
     void slotPause();
     void slotResume();
     void slotWrite(const std::shared_ptr<std::string> &data, double clock);
+    void slogSetVolume(int vol);
 
     QAudioDevice DefaultDevice();
     QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
@@ -73,6 +76,9 @@ public:
 
     // 获取音频当前的时间点，double秒数
     double audioClock();
+
+    // 设置音量[0, 100]
+    void setVolume(int vol);
 
 private:
     bool createThread;

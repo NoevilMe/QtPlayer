@@ -141,12 +141,20 @@ PlayerForm::PlayerForm(QWidget *parent)
     ui->setupUi(this);
     ui->listWidgetFiles->hide();
 
-    // loadIcons();
+    volumeSlider = new VolumeSlider(Qt::Vertical, this);
+    volumeSlider->setFixedSize(20, 100);
+    volumeSlider->setRange(0, 100);
+    volumeSlider->setVisible(false);
+    volumeSlider->setValue(50);
+    connect(volumeSlider, &VolumeSlider::valueChanged, this,
+            &PlayerForm::slotVolumeChanged);
 
     timerProgress = new QTimer(this); // 定时器-获取当前视频时间
     connect(timerProgress, &QTimer::timeout, this,
             &PlayerForm::slotTimerTimeout);
     timerProgress->setInterval(500);
+
+    initContext();
 
     // 使用队列模式，保证即使是UI线程触发playDone信号，也能按顺序最后到达，重置控件
     connect(this, &PlayerForm::playDone, this, &PlayerForm::slotPlayDone,
@@ -237,6 +245,8 @@ bool PlayerForm::NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out) {
                  << applyFmt;
 
         speaker->start(audioDevice, applyFmt);
+        // start之后才有效
+        speaker->setVolume(volumeSlider->value());
         qDebug() << QThread::currentThreadId() << "start speaker";
     }
 
@@ -265,6 +275,7 @@ bool PlayerForm::openMedia(MediaSource media) {
         }
 
         speaker.reset(new AudioSpeaker(true));
+
 
         player->SetAudioFrameCallback(
             std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
@@ -424,21 +435,10 @@ void PlayerForm::listOutputAudioDevices() {
 }
 
 void PlayerForm::onTotalSeconds(double seconds) {
-
     int sec = (int)seconds;
     ui->horSliderProgress->setRange(0, sec);
 
-    QString totalTime = formatSeconds(sec, false);
-    // QString hStr = QString("0%1").arg(sec / 3600);
-    // QString mStr = QString("0%1").arg(sec / 60 % 60);
-    // QString sStr = QString("0%1").arg(sec % 60);
-    // if (hStr == "00") {
-    //     totalTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
-    // } else {
-    //     totalTime =
-    //         QString("%1:%2:%3").arg(hStr).arg(mStr.right(2)).arg(sStr.right(2));
-    // }
-
+    QString totalTime = formatTimestamp(sec, false);
     ui->labelTotalTime->setText(totalTime);
 }
 
@@ -458,7 +458,6 @@ void PlayerForm::stopPlayer() {
 }
 
 void PlayerForm::stopSpeaker() {
-    qDebug() << QThread::currentThreadId() << "stop speaker ...";
     if (speaker) {
         qDebug() << QThread::currentThreadId() << "reset speaker ...";
         speaker->stop();
@@ -478,7 +477,37 @@ void PlayerForm::resumeSpeaker() {
     }
 }
 
-QString PlayerForm::formatSeconds(qint64 seconds, bool longFmt) {
+void PlayerForm::initContext() {
+    if (windowTitleCb) {
+        windowTitleCb("");
+    }
+
+    timerProgress->stop();
+
+    clearTimestamp();
+    ui->horSliderProgress->setValue(0);
+    ui->pushButtonPlay->setChecked(false);
+}
+
+void PlayerForm::clearContext() {
+    initContext();
+
+    ui->openGLWidget->clear();
+}
+
+void PlayerForm::setVolumeIcon(bool mute) {
+    ui->pushButtonVolume->setChecked(mute);
+}
+
+QString PlayerForm::formatTimestamp(int seconds, bool longFmt) {
+    if (seconds < 0) {
+        if (longFmt) {
+            return QString("--:--:--");
+        } else {
+            return QString("--:--");
+        }
+    }
+
     QString fmtStr;
     QString hStr = QString("0%1").arg(seconds / 3600);
     QString mStr = QString("0%1").arg(seconds / 60 % 60);
@@ -490,6 +519,12 @@ QString PlayerForm::formatSeconds(qint64 seconds, bool longFmt) {
     }
 
     return fmtStr;
+}
+
+void PlayerForm::clearTimestamp() {
+    QString nullTs = formatTimestamp(-1, false);
+    ui->labelCurrentTime->setText(nullTs);
+    ui->labelTotalTime->setText(nullTs);
 }
 
 // bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
@@ -550,14 +585,7 @@ void PlayerForm::slotPlayDone() {
     player.reset();
     speaker.reset();
 
-    timerProgress->stop();
-    ui->horSliderProgress->setValue(0);
-    ui->pushButtonPlay->setChecked(false);
-
-    ui->openGLWidget->clear();
-
-    ui->labelCurrentTime->setText("--");
-    ui->labelTotalTime->setText("--");
+    clearContext();
 }
 
 void PlayerForm::slotTimerTimeout() {
@@ -565,13 +593,22 @@ void PlayerForm::slotTimerTimeout() {
         if (!player)
             return;
 
-        qint64 sec = player->GetClock();
+        int sec = player->GetClock();
         ui->horSliderProgress->setValue(sec);
 
-        QString curTime = formatSeconds(sec, false);
-
-        ui->labelCurrentTime->setText(curTime);
+        QString currentTime = formatTimestamp(sec, false);
+        ui->labelCurrentTime->setText(currentTime);
     }
+}
+
+void PlayerForm::slotVolumeChanged(int value) {
+    qDebug() << "slotVolumeChanged" << value;
+
+    if (speaker) {
+        speaker->setVolume(value);
+    }
+
+    setVolumeIcon(value <= 0);
 }
 
 void PlayerForm::closeEvent(QCloseEvent *event) {
@@ -594,10 +631,6 @@ void PlayerForm::loadIcons() {
 
     ui->pushButtonPlay->setIcon(icon);
     ui->pushButtonPlay->setIconSize(QSize(42, 42));
-    // ui->pushButtonPlay->setStyleSheet("QPushButton#pushButtonPlay:hover{"
-    //                                   "border:1px solid transparent;"
-    //                                   "}");
-    // ui->pushButtonPlay->
 }
 
 void PlayerForm::on_pushButtonPlay_clicked(bool checked) {
@@ -621,4 +654,28 @@ void PlayerForm::on_pushButtonStop_clicked() {
 
     qDebug() << QThread::currentThreadId() << "emit playDone";
     emit playDone();
+}
+
+void PlayerForm::on_pushButtonVolume_clicked(bool checked) {
+    qDebug() << "pushButtonVolume checked" << checked;
+
+    // 设吹按钮样式
+    ui->pushButtonVolume->setChecked(volumeSlider->value() == 0);
+
+    QPushButton *btn = ui->pushButtonVolume;
+    if (volumeSlider->orientation() == Qt::Vertical) {
+        volumeSlider->move(btn->x(), this->height() - btn->y() -
+                                         volumeSlider->height() - 10);
+    } else {
+        volumeSlider->move(btn->x() - volumeSlider->width() + 5,
+                           this->height() - btn->y() - 17);
+    }
+    volumeSlider->setVisible(true);
+    volumeSlider->setFocus();
+}
+
+void PlayerForm::mousePressEvent(QMouseEvent *event) {
+    // 获取焦点，隐藏音量控件
+    this->setFocus();
+    QWidget::mousePressEvent(event);
 }
