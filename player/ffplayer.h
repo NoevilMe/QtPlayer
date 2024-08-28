@@ -48,8 +48,12 @@ struct VideoFormat {
 
 using AudioFrameCallback = std::function<void(const char *, int, double)>;
 using VideoFrameCallback = std::function<void(AVFrame *, double)>;
+
+using NegotiateVideoFormatCallback =
+    std::function<bool(const VideoFormat *, VideoFormat *)>;
 using NegotiateAudioFormatCallback =
     std::function<bool(const AudioFormat *, AudioFormat *)>;
+
 using AudioClockCallback = std::function<double()>;
 using PlayDoneCallback = std::function<void(void)>;
 
@@ -104,6 +108,11 @@ public:
 
     void SetAudioClockCallback(const AudioClockCallback &cb) {
         audio_clock_cb_ = cb;
+    }
+
+    void
+    SetNegotiateVideoFormatCallback(const NegotiateVideoFormatCallback &cb) {
+        nego_video_format_cb_ = cb;
     }
 
     void
@@ -188,6 +197,7 @@ protected:
     VideoFrameCallback video_frame_cb_;
     AudioFrameCallback audio_frame_cb_;
     AudioClockCallback audio_clock_cb_;
+    NegotiateVideoFormatCallback nego_video_format_cb_;
     NegotiateAudioFormatCallback nego_audio_format_cb_;
     PlayDoneCallback play_done_cb_;
     std::shared_ptr<spdlog::logger> logger_;

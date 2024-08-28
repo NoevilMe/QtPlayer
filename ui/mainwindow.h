@@ -51,6 +51,8 @@ private:
 
     void openMediaActionTriggered(bool checked);
 
+    void setTitle(const QString &title);
+
 private:
     Ui::MainWindow *ui;
     QWK::WidgetWindowAgent *windowAgent;

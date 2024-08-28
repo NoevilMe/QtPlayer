@@ -3,6 +3,7 @@
 #include "ui_playerform.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QMediaDevices>
 #include <QStyle>
 #include <QTimer>
@@ -167,7 +168,7 @@ PlayerForm::~PlayerForm() {
 
 bool PlayerForm::NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out) {
     // 用于协商音频格式与音频设备。
-    // return 是否需要重采样。支持默认格式，否则需要重采样
+    // return 是否需要重采样。
 
     if (!in || !out)
         return false;
@@ -243,9 +244,6 @@ bool PlayerForm::NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out) {
 }
 
 bool PlayerForm::openMedia(MediaSource media) {
-
-    AudioSpeaker::getDevice();
-
     stopPlayer();
     stopSpeaker();
 
@@ -292,6 +290,16 @@ bool PlayerForm::openMedia(MediaSource media) {
     if (player->Play()) {
         qDebug() << "播放成功";
         ui->pushButtonPlay->setChecked(true);
+
+        if (windowTitleCb) {
+            if (media.type == MediaType::kMediaFile) {
+                QString title = QFileInfo(media.src.data()).fileName();
+                windowTitleCb(title);
+            } else {
+                windowTitleCb(media.src.data());
+            }
+        }
+
         return true;
     } else {
         qDebug() << "播放失败";
@@ -384,6 +392,8 @@ void PlayerForm::openDialog() {
         qDebug() << "open media " << (int)dlg.mediaSource.type << ", "
                  << dlg.mediaSource.src;
         openMedia(dlg.mediaSource);
+    } else {
+        ui->pushButtonPlay->setChecked((bool)player);
     }
 }
 
@@ -418,16 +428,16 @@ void PlayerForm::onTotalSeconds(double seconds) {
     int sec = (int)seconds;
     ui->horSliderProgress->setRange(0, sec);
 
-    QString totalTime;
-    QString hStr = QString("0%1").arg(sec / 3600);
-    QString mStr = QString("0%1").arg(sec / 60 % 60);
-    QString sStr = QString("0%1").arg(sec % 60);
-    if (hStr == "00") {
-        totalTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
-    } else {
-        totalTime =
-            QString("%1:%2:%3").arg(hStr).arg(mStr.right(2)).arg(sStr.right(2));
-    }
+    QString totalTime = formatSeconds(sec, false);
+    // QString hStr = QString("0%1").arg(sec / 3600);
+    // QString mStr = QString("0%1").arg(sec / 60 % 60);
+    // QString sStr = QString("0%1").arg(sec % 60);
+    // if (hStr == "00") {
+    //     totalTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
+    // } else {
+    //     totalTime =
+    //         QString("%1:%2:%3").arg(hStr).arg(mStr.right(2)).arg(sStr.right(2));
+    // }
 
     ui->labelTotalTime->setText(totalTime);
 }
@@ -466,6 +476,20 @@ void PlayerForm::resumeSpeaker() {
     if (speaker) {
         speaker->resume();
     }
+}
+
+QString PlayerForm::formatSeconds(qint64 seconds, bool longFmt) {
+    QString fmtStr;
+    QString hStr = QString("0%1").arg(seconds / 3600);
+    QString mStr = QString("0%1").arg(seconds / 60 % 60);
+    QString sStr = QString("0%1").arg(seconds % 60);
+    if (!longFmt && hStr == "00") {
+        fmtStr = QString("%1:%2").arg(mStr.right(2), sStr.right(2));
+    } else {
+        fmtStr = QString("%1:%2:%3").arg(hStr, mStr.right(2), sStr.right(2));
+    }
+
+    return fmtStr;
 }
 
 // bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
@@ -524,11 +548,16 @@ void PlayerForm::on_pushButtonFullScreen_toggled(bool checked) {
 void PlayerForm::slotPlayDone() {
     qDebug() << QThread::currentThreadId() << "slotPlayDone";
     player.reset();
+    speaker.reset();
+
     timerProgress->stop();
     ui->horSliderProgress->setValue(0);
     ui->pushButtonPlay->setChecked(false);
 
     ui->openGLWidget->clear();
+
+    ui->labelCurrentTime->setText("--");
+    ui->labelTotalTime->setText("--");
 }
 
 void PlayerForm::slotTimerTimeout() {
@@ -536,21 +565,10 @@ void PlayerForm::slotTimerTimeout() {
         if (!player)
             return;
 
-        qint64 Sec = player->GetClock();
-        ui->horSliderProgress->setValue(Sec);
+        qint64 sec = player->GetClock();
+        ui->horSliderProgress->setValue(sec);
 
-        QString curTime;
-        QString hStr = QString("0%1").arg(Sec / 3600);
-        QString mStr = QString("0%1").arg(Sec / 60 % 60);
-        QString sStr = QString("0%1").arg(Sec % 60);
-        if (hStr == "00") {
-            curTime = QString("%1:%2").arg(mStr.right(2)).arg(sStr.right(2));
-        } else {
-            curTime = QString("%1:%2:%3")
-                          .arg(hStr)
-                          .arg(mStr.right(2))
-                          .arg(sStr.right(2));
-        }
+        QString curTime = formatSeconds(sec, false);
 
         ui->labelCurrentTime->setText(curTime);
     }

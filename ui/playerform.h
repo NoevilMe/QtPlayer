@@ -30,6 +30,10 @@ public:
     void playVideo(AVFrame *frame, double clock);
     bool NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out);
 
+    void setWindowTitleCb(const std::function<void(const QString &)> &cb) {
+        windowTitleCb = cb;
+    }
+
     void openDialog();
 
 signals:
@@ -63,6 +67,8 @@ private:
     void pauseSpeaker();
     void resumeSpeaker();
 
+    QString formatSeconds(qint64 seconds, bool longFmt);
+
 private:
     Ui::PlayerForm *ui;
 
@@ -74,6 +80,8 @@ private:
     Qt::WindowFlags fsFlags_;
 
     QTimer *timerProgress; // 定时器-获取当前视频时间
+
+    std::function<void(const QString &)> windowTitleCb;
 
     std::unique_ptr<AudioSpeaker> speaker;
 

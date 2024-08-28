@@ -23,11 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->stackedWidget->addWidget(pagePlayer);
     ui->stackedWidget->addWidget(pageMonitor);
 
-    if (curWinType == WindowType::Player) {
-        ui->stackedWidget->setCurrentWidget(pagePlayer);
-    }
-
-    ui->stackedWidget->update();
+    switchWindowType(curWinType);
 
     loadStyleSheet(Light);
 }
@@ -256,6 +252,8 @@ void MainWindow::switchWindowType(WindowType type) {
     curWinType = type;
     if (type == WindowType::Player) {
         ui->stackedWidget->setCurrentWidget(pagePlayer);
+        pagePlayer->setWindowTitleCb(
+            std::bind(&MainWindow::setTitle, this, std::placeholders::_1));
     } else if (type == WindowType::Monitor) {
         ui->stackedWidget->setCurrentWidget(pageMonitor);
     }
@@ -268,6 +266,8 @@ void MainWindow::openMediaActionTriggered(bool checked) {
         pagePlayer->openDialog();
     }
 }
+
+void MainWindow::setTitle(const QString &title) { setWindowTitle(title); }
 
 void MainWindow::loadStyleSheet(Theme theme) {
     if (!styleSheet().isEmpty() && theme == currentTheme)

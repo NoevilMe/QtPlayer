@@ -164,26 +164,6 @@
               </widget>
              </item>
              <item>
-              <widget class="QPushButton" name="pushButtonSlow">
-               <property name="toolTip">
-                <string>减速</string>
-               </property>
-               <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QPushButton" name="pushButtonFast">
-               <property name="toolTip">
-                <string>加速</string>
-               </property>
-               <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
-             <item>
               <widget class="QLabel" name="labelCurrentTime">
                <property name="text">
                 <string>00:00:00</string>
@@ -216,6 +196,19 @@
                 </size>
                </property>
               </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="pushButton">
+               <property name="maximumSize">
+                <size>
+                 <width>30</width>
+                 <height>30</height>
+                </size>
+               </property>
+               <property name="text">
+                <string>倍速</string>
+               </property>
+              </widget>
              </item>
              <item>
               <widget class="QPushButton" name="pushButtonVolume">

@@ -233,14 +233,6 @@ QWidget#widgetControlPane > QPushButton#pushButtonPlay:checked{
 image:url(:/images/Pause.png);
 }
 
-QPushButton#pushButtonSlow{
-image:url(:/images/Slow.png);
-}
-
-QPushButton#pushButtonFast{
-image:url(:/images/Fast.png);
-}
-
 QPushButton#pushButtonList{
 image:url(:/images/Settings.png);
 }
