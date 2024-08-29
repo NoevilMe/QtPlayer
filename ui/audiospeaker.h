@@ -36,9 +36,6 @@ public slots:
     void slotWrite(const std::shared_ptr<std::string> &data, double clock);
     void slogSetVolume(int vol);
 
-    QAudioDevice DefaultDevice();
-    QAudioFormat PreferredFormat(QAudioDevice *device = nullptr);
-
     void handleStateChanged(QAudio::State newState);
 
 private:

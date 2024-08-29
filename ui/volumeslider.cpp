@@ -7,7 +7,7 @@
 VolumeSlider::VolumeSlider(Qt::Orientation orientation, QWidget *parent)
     : QSlider(orientation, parent) {
 
-    this->setFocusPolicy(Qt::StrongFocus);
+    // this->setFocusPolicy(Qt::StrongFocus);
     this->setStyleSheet(
         R"(QSlider{
 background-color: rgba(0, 43, 54, 0.8);
@@ -47,9 +47,7 @@ margin: 0 -3px;
 )");
 }
 
-VolumeSlider::~VolumeSlider() {
-
-}
+VolumeSlider::~VolumeSlider() {}
 
 void VolumeSlider::focusOutEvent(QFocusEvent *ev) {
     qDebug() << "focusOutEvent";

@@ -117,32 +117,6 @@ void AudioSpeakerImpl::slogSetVolume(int vol) {
     }
 }
 
-QAudioDevice AudioSpeakerImpl::DefaultDevice() {
-    return QMediaDevices::defaultAudioOutput();
-}
-
-QAudioFormat AudioSpeakerImpl::PreferredFormat(QAudioDevice *device) {
-    QAudioFormat format;
-    format.setSampleRate(44100);
-    format.setChannelCount(2);
-    format.setSampleFormat(QAudioFormat::Int16);
-
-    if (device) {
-        if (device->isFormatSupported(format)) {
-            return format;
-        } else {
-            return device->preferredFormat();
-        }
-    } else {
-        QAudioDevice info(QMediaDevices::defaultAudioOutput());
-        if (info.isFormatSupported(format)) {
-            return format;
-        } else {
-            return info.preferredFormat();
-        }
-    }
-}
-
 void AudioSpeakerImpl::handleStateChanged(QAudio::State newState) {
     qDebug() << "handleStateChanged " << newState << ", buffer size "
              << audioSink->bufferSize() << ", bytes free "
@@ -275,9 +249,12 @@ void AudioSpeaker::write(const std::shared_ptr<std::string> &data,
     if (!impl)
         return;
 
+    qDebug() << "AudioSpeaker::write" << data->length();
+
     sendingData.store(true);
-    // 这在音频线程执行，但是impl可能会被其他线程停止掉
-    while (impl && impl->bytesFree() < data->length()) {
+    // 这在音频线程执行，但是impl可能会被其他线程停止掉, 所以要检测有效性
+    // 实际测试下来需要有一定冗余空间，否则AudioSink可能会吞噬掉一些数据。这里设置为2倍
+    while (impl && impl->bytesFree() < data->length() * 2) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 

@@ -47,6 +47,8 @@ set(PROJECT_SOURCES
         ui/yuvvideowidget.h
         ui/audiospeaker.h
         ui/audiospeaker.cpp
+        ui/progressslider.h
+        ui/progressslider.cpp
         player/av_util.cpp
         player/av_util.h
         player/ffplayer.cpp
@@ -64,6 +66,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         skin/skin.qrc
+
     )
 else()
     add_executable(${PROJECT_NAME}

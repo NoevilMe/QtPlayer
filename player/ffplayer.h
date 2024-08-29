@@ -4,7 +4,7 @@
 #include "av_def.h"
 #include "util/util.h"
 
-#include <list>
+#include <deque>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -45,6 +45,13 @@ struct VideoFormat {
     AVRational sample_aspect_ratio = {0, 0};
     AVColorPrimaries color_primaries = AVCOL_PRI_UNSPECIFIED;
 };
+
+struct FramePacket {
+    AVPacket *pkt;
+    unsigned char flags = 0;
+};
+
+constexpr unsigned char kFramePacketSeek = 0x1;
 
 using AudioFrameCallback = std::function<void(const char *, int, double)>;
 using VideoFrameCallback = std::function<void(AVFrame *, double)>;
@@ -97,6 +104,9 @@ public:
 
     // 停止播放
     void Stop();
+
+    // 按时钟跳转
+    bool Seek(double clock);
 
     void SetVideoFrameCallback(const VideoFrameCallback &cb) {
         video_frame_cb_ = cb;
@@ -176,16 +186,18 @@ protected:
     // video
     std::thread video_thread_;
     std::unique_ptr<VideoPlayer> video_player_;
-    std::list<AVPacket *> video_queue_;
+    std::deque<FramePacket> video_queue_;
     std::mutex video_mutex_;
     std::condition_variable video_cv_;
+    long long video_frames_ = 0;
 
     // audio
     std::thread audio_thread_;
     std::unique_ptr<AudioPlayer> audio_player_;
-    std::list<AVPacket *> audio_queue_;
+    std::deque<FramePacket> audio_queue_;
     std::mutex audio_mutex_;
     std::condition_variable audio_cv_;
+    long long audio_frames_ = 0;
 
     std::atomic_bool paused_;
     std::mutex paused_mutex_;
@@ -194,6 +206,9 @@ protected:
     std::atomic_bool running_;
 
     std::thread read_thread_;
+    std::mutex read_mutex_;
+    double seek_clock_ = 0;
+
     VideoFrameCallback video_frame_cb_;
     AudioFrameCallback audio_frame_cb_;
     AudioClockCallback audio_clock_cb_;
@@ -216,21 +231,31 @@ public:
     // 时间基，只能从流中读取。解码器的时间不能用于计算clock。
     AVRational TimeBase();
 
+    long long Duration() const;
+    long long Frames() const;
+
     void set_codec(const AVCodec *c);
     const AVCodec *codec() const { return codec_; }
+
+    long long decode_pts_delay() const { return decode_pts_delay_; }
 
     void ResetDecodeContext();
 
     virtual void LogInput() = 0;
     virtual void LogHw() {}
     virtual bool InitDecodeContext() = 0;
+    virtual bool FlushDecodeContext() = 0;
     virtual bool HandleFrame(AVPacket *pkt) = 0;
+    virtual void Seek(double clock) = 0;
 
 protected:
     int index_;
     AVStream *stream_;
     const AVCodec *codec_ = nullptr;
     AVCodecContext *decode_ctx_ = nullptr;
+
+    long long decode_pts_delay_ = -1;
+    long long seek_pts_ = 0;
 
     AVFrame *decoded_frame_ = nullptr;
 
@@ -265,7 +290,9 @@ public:
     void LogInput() override;
     void LogHw() override;
     bool InitDecodeContext() override;
+    bool FlushDecodeContext() override;
     bool HandleFrame(AVPacket *pkt) override;
+    void Seek(double clock) override;
 
 private:
     // 视频硬件加速设备
@@ -303,7 +330,9 @@ public:
     // AVPlayer interface
     void LogInput() override;
     bool InitDecodeContext() override;
+    bool FlushDecodeContext() override;
     bool HandleFrame(AVPacket *pkt) override;
+    void Seek(double clock) override;
 
     bool InitSwrContext();
     void ResetSwrContext();
@@ -316,6 +345,8 @@ private:
 private:
     AudioFormat resample_fmt_;
     SwrContext *swr_ctx_ = nullptr;
+
+    bool seeking_ = false;
 
     AudioFrameCallback frame_cb_;
 };

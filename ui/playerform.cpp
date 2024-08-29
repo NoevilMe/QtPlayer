@@ -159,6 +159,8 @@ PlayerForm::PlayerForm(QWidget *parent)
     // 使用队列模式，保证即使是UI线程触发playDone信号，也能按顺序最后到达，重置控件
     connect(this, &PlayerForm::playDone, this, &PlayerForm::slotPlayDone,
             Qt::QueuedConnection);
+    connect(ui->horSliderProgress, &ProgressSlider::sliderChanged, this,
+            &PlayerForm::slotProgressChanged);
 
     qDebug() << "PlayerForm" << QThread::currentThreadId();
 }
@@ -227,6 +229,12 @@ bool PlayerForm::NegotiateAudioFormat(const AudioFormat *in, AudioFormat *out) {
         out->channel_count = preferFmt.channelCount();
         resample = true;
     }
+
+    // hardcode
+    // out->sample_fmt =
+    //     qtav::QtSampleFormatToAvSampleFormat(QAudioFormat::SampleFormat::Int16);
+    // resample = true;
+
     qDebug() << "NegotiateAudioFormat resample" << resample << ", sample fmt"
              << qtav::AvSampleFormatToQtSampleFormat(
                     (AVSampleFormat)out->sample_fmt)
@@ -275,7 +283,6 @@ bool PlayerForm::openMedia(MediaSource media) {
         }
 
         speaker.reset(new AudioSpeaker(true));
-
 
         player->SetAudioFrameCallback(
             std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
@@ -594,7 +601,9 @@ void PlayerForm::slotTimerTimeout() {
             return;
 
         int sec = player->GetClock();
-        ui->horSliderProgress->setValue(sec);
+        if (!progressSliderPressed) {
+            ui->horSliderProgress->setValue(sec);
+        }
 
         QString currentTime = formatTimestamp(sec, false);
         ui->labelCurrentTime->setText(currentTime);
@@ -602,8 +611,6 @@ void PlayerForm::slotTimerTimeout() {
 }
 
 void PlayerForm::slotVolumeChanged(int value) {
-    qDebug() << "slotVolumeChanged" << value;
-
     if (speaker) {
         speaker->setVolume(value);
     }
@@ -678,4 +685,44 @@ void PlayerForm::mousePressEvent(QMouseEvent *event) {
     // 获取焦点，隐藏音量控件
     this->setFocus();
     QWidget::mousePressEvent(event);
+}
+
+void PlayerForm::slotProgressChanged(int value) {
+    qDebug() << "slotProgressChanged to" << value;
+
+    if (!player)
+        return;
+
+    player->Seek(value);
+}
+
+void PlayerForm::on_horSliderProgress_sliderReleased() {
+    // 点击或拖动都会触发 释放信号
+    qDebug() << "on_horSliderProgress_sliderReleased";
+
+    // 这里不能直接使用value，其值为按下时候的值，不是释放的值。
+
+    if (progressSliderPressed) {
+        if (progressSliderValue >= 0) { // 有效拖动
+            qDebug() << "sliderReleased emit sliderChanged"
+                     << progressSliderValue;
+            emit ui->horSliderProgress->sliderChanged(progressSliderValue);
+        }
+        progressSliderPressed = false;
+    }
+}
+
+void PlayerForm::on_horSliderProgress_sliderPressed() {
+    qDebug() << "on_horSliderProgress_sliderPressed";
+    progressSliderPressed = true;
+    progressSliderValue = -1; // 重置
+}
+
+void PlayerForm::on_horSliderProgress_sliderMoved(int position) {
+    qDebug() << "on_horSliderProgress_sliderMoved" << position;
+    progressSliderValue = position; // 更新
+}
+
+void PlayerForm::on_horSliderProgress_valueChanged(int value) {
+    qDebug() << "on_horSliderProgress_valueChanged" << value;
 }

@@ -8,9 +8,9 @@ extern "C" {
 };
 
 // 帧间33/40ms
-#define VIDEO_PACKET_MAX_SIZE 100
+#define VIDEO_PACKET_MAX_SIZE 50
 // 帧间46ms， 100个包
-#define AUDIO_PACKET_MAX_SIZE 100
+#define AUDIO_PACKET_MAX_SIZE 50
 
 #define OPEN_INPUT_TIMEOUT_MS 10000
 
@@ -226,19 +226,53 @@ void FFPlayer::SetMediaSource(MediaSource media) {
 }
 
 void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
+    // 前面在video player已经将pts不正常的frame过滤了, 到这的视频帧都是正常的
+    // 但是音频因为设备有缓存，可能时间是不正确的
+
     auto audio_clock = audio_clock_cb_();
+    // audio clock 取的是缓存最新值与缓存大小的计算值。
+    // 向后跳转：audio clock
+    // [很小，小..., 跳转值...] 或者 [小.., 跳转值...]
+    // video frame callback wait 50.27251700680272, pkt_dts 4694400, pts
+    // 4694400, clock 52.160000, audio clock 1.887483
+    // 视频帧在前，音频时间很小，会造成沉睡卡死
+    // 音频帧在前，先更新音频时间，不会造成长时间卡死
+
+    // 向后跳转。
+    // 当前77， seek 99, 视频97, 音频77
+    // 之后视频98， 音频98
+    if (audio_clock < seek_clock_ && clock < seek_clock_ &&
+        audio_clock < clock) {
+        // 跳转点之前，视频帧提前于音频帧，都直接丢弃。
+        logger_->warn(
+            "discard video frame pts {}, clock {} , audio clock {}, seek {}",
+            frame->pts, clock, audio_clock, seek_clock_);
+        // discard video frame pts 6368400, clock 70.76 , audio
+        // clock 69.2844671201814, seek 74
+        // 视频丢弃之后直接返回再次解码，所以仍会继续提前，直到卡住到seek clock
+        return;
+    }
+
+    // 向前跳转，audio clock
+    // [很大，小...，跳转值...]或者[小...，跳转值...]
+
+    // 当前170， seek 99, 视频97, 音频170。 视频大时间戳已经在前面用delay
+    // pts过滤
+
     auto diff = clock - audio_clock;
     if (diff > 0.04) {
+        logger_->debug("video frame callback wait {:f}, pkt_dts {}, pts {}, "
+                       "clock {:f}, audio clock {:f}",
+                       diff, frame->pkt_dts, frame->pts, clock, audio_clock);
         std::this_thread::sleep_for(
             std::chrono::milliseconds((long long)(diff * 1000)));
 
         audio_clock = audio_clock_cb_();
-
-        logger_->info("video frame pts {}, clock {}, audio clock {}, diff {}",
-                      frame->pts, clock, audio_clock, clock - audio_clock);
     } else {
-        logger_->info("video frame pts {}, clock {}, audio clock {}, diff {}",
-                      frame->pts, clock, audio_clock, clock - audio_clock);
+        logger_->info("video frame callback pkt_dts {}, pts {}, clock {:f}, "
+                      "audio clock {:f}, diff {:f}",
+                      frame->pkt_dts, frame->pts, clock, audio_clock,
+                      clock - audio_clock);
     }
 
     video_frame_cb_(frame, clock);
@@ -246,7 +280,8 @@ void FFPlayer::PlayVideoFrame(AVFrame *frame, double clock) {
 
 void FFPlayer::PlayAudioFrame(const char *data, int size, double clock) {
     if (audio_frame_cb_) {
-        logger_->debug("audio_frame_cb_ {}, {}, {}", (void *)data, size, clock);
+        logger_->debug("audio_frame_cb_ {}, size {}, clock {:f}", (void *)data,
+                       size, clock);
         audio_frame_cb_(data, size, clock);
     }
 }
@@ -575,6 +610,74 @@ void FFPlayer::Stop() {
     logger_->debug("Stop done");
 }
 
+bool FFPlayer::Seek(double clock) {
+    // 不一定是时间单位，也有可能是字节单位，也可能是帧数单位（第几帧）
+    logger_->debug("seek clock {}", clock);
+
+    // 计算跳转到的位置 单位为微秒
+    int64_t clock_pos = (int64_t)(clock * AV_TIME_BASE);
+    /*
+    AVSEEK_FLAG_BYTE，按字节大小进行跳转。ts 参数就是字节大小
+    AVSEEK_FLAG_FRAME，按帧数大小进行跳转。 ts 参数就是帧数大小，代表
+    avformat_seek_file() 会把读取位置设置到第几帧。
+    AVSEEK_FLAG_ANY，可以跳转到非关键帧的读取位置，但是解码会出现马赛克。
+    AVSEEK_FLAG_BACKWARD，往 ts 的后面找关键帧，默认是往 ts 的前面找关键帧。
+     */
+    int seek_flags = 0; // AVSEEK_FLAG_FRAME
+
+    /**
+    如果 stream_index 为 -1 ，那 ts 的时间基就是 AV_TIME_BASE，
+    如果stream_index 不等于 -1 ，那 ts 的时间基就是 stream_index
+    对应的流的时间基。
+    */
+
+    // 使用AV_TIME_BASE
+    if (true) {
+        std::lock_guard<std::mutex> lock(read_mutex_);
+        int ret = avformat_seek_file(fmt_ctx_, -1, INT64_MIN, clock_pos,
+                                     INT64_MAX, seek_flags);
+
+        if (ret < 0) {
+            logger_->error("avformat_seek_file failure, {}",
+                           avutil::ErrorString(ret));
+            return false;
+        }
+    } else {
+        // 转为stream时间基
+        long long seek_pos =
+            av_rescale_q(clock_pos, AV_TIME_BASE_Q, video_player_->TimeBase());
+        int ret =
+            avformat_seek_file(fmt_ctx_, video_player_->index(), INT64_MIN,
+                               seek_pos, INT64_MAX, seek_flags);
+        if (ret < 0) {
+            logger_->error("avformat_seek_file failure, {}",
+                           avutil::ErrorString(ret));
+            return false;
+        }
+    }
+
+    logger_->info("avformat_seek_file clock {} success", clock);
+    seek_clock_ = clock;
+
+    {
+        std::lock_guard<std::mutex> lock(video_mutex_);
+        video_queue_.clear();
+        video_queue_.emplace_back(FramePacket{nullptr, kFramePacketSeek});
+        video_cv_.notify_one();
+        logger_->debug("seek clock clear video queue");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(audio_mutex_);
+        audio_queue_.clear();
+        audio_queue_.emplace_back(FramePacket{nullptr, kFramePacketSeek});
+        audio_cv_.notify_one();
+        logger_->debug("seek clock clear audio queue");
+    }
+
+    return true;
+}
+
 void FFPlayer::Reset() {
     ResetInputContext();
     ResetDecodeContext();
@@ -691,25 +794,55 @@ void FFPlayer::ReadThreadFunc() {
 
             interrupt_.func_start_timestamp = util::TimeMilliseconds();
 
-            err = av_read_frame(fmt_ctx_, pkt);
-            if (0 == err) {
-                logger_->trace("----------- av_read_frame {}, index {}, size "
-                               "{}, pts {}, duration {} -----------",
-                               (void *)pkt->data, pkt->stream_index, pkt->size,
-                               pkt->pts, pkt->duration);
+            {
+                std::lock_guard<std::mutex> lock(read_mutex_);
+                err = av_read_frame(fmt_ctx_, pkt);
+            }
 
+            if (0 == err) {
                 if (video_player_ &&
                     video_player_->index() == pkt->stream_index) {
+                    ++video_frames_;
+                    if (pkt->flags & AV_PKT_FLAG_KEY) {
+                        logger_->trace(
+                            "----------- av_read_frame {}, index {}, video, "
+                            "size {:>5}, dts {:>10}, pts {:>10}, duration "
+                            "{}, I {} -----------",
+                            (void *)pkt->data, pkt->stream_index, pkt->size,
+                            pkt->dts, pkt->pts, pkt->duration, video_frames_);
+                    } else {
+                        logger_->trace(
+                            "----------- av_read_frame {}, index {}, video, "
+                            "size {:>5}, dts {:>10}, pts {:>10}, duration "
+                            "{}, P/B {} -----------",
+                            (void *)pkt->data, pkt->stream_index, pkt->size,
+                            pkt->dts, pkt->pts, pkt->duration, video_frames_,
+                            pkt->pos);
+                    }
+
                     std::lock_guard<std::mutex> lock(video_mutex_);
-                    video_queue_.emplace_back(pkt);
+                    video_queue_.emplace_back(FramePacket{pkt, 0});
                     video_cv_.notify_one();
 
                 } else if (audio_player_ &&
                            audio_player_->index() == pkt->stream_index) {
+                    ++audio_frames_;
+                    logger_->trace("----------- av_read_frame {}, index {}, "
+                                   "audio, size {:>5}, dts {:>10}, pts {:>10}, "
+                                   "duration {}, {} -----------",
+                                   (void *)pkt->data, pkt->stream_index,
+                                   pkt->size, pkt->dts, pkt->pts, pkt->duration,
+                                   audio_frames_);
+
                     std::lock_guard<std::mutex> lock(audio_mutex_);
-                    audio_queue_.emplace_back(pkt);
+                    audio_queue_.emplace_back(FramePacket{pkt, 0});
                     audio_cv_.notify_one();
                 } else {
+                    logger_->trace(
+                        "----------- av_read_frame {}, index {}, size "
+                        "{}, dts {}, pts {}, duration {} -----------",
+                        (void *)pkt->data, pkt->stream_index, pkt->size,
+                        pkt->dts, pkt->pts, pkt->duration);
                     av_packet_free(&pkt);
                 }
             } else if (err == AVERROR_EOF) {
@@ -764,13 +897,27 @@ void FFPlayer::VideoThreadFunc() {
                 break;
             }
 
-            AVPacket *video_pkt = video_queue_.front();
+            // logger_->trace("video thread frame queue wait done, queue size
+            // {}",
+            //                video_queue_.size());
+
+            FramePacket frame = video_queue_.front();
             video_queue_.pop_front();
             lock.unlock();
 
-            logger_->trace("video frame {} ", (void *)video_pkt->data);
-            HandleVideoFrame(video_pkt);
-            av_packet_free(&video_pkt);
+            if (frame.flags & kFramePacketSeek) {
+                video_player_->Seek(seek_clock_);
+            } else {
+                logger_->trace("video thread handle frame {}, dts {}, pts {}, "
+                               "queue left {}",
+                               (void *)frame.pkt->data, frame.pkt->dts,
+                               frame.pkt->pts, video_queue_.size());
+                HandleVideoFrame(frame.pkt);
+                // logger_->trace(
+                //     "video thread handle frame {}, dts {}, pts {} done",
+                //     (void *)frame.pkt->data, frame.pkt->dts, frame.pkt->pts);
+                av_packet_free(&frame.pkt);
+            }
         }
     } catch (std::runtime_error &e) {
         logger_->error("VideoThreadFunc runtime_error, {}", e.what());
@@ -805,13 +952,25 @@ void FFPlayer::AudioThreadFunc() {
                 break;
             }
 
-            AVPacket *audio_pkt = audio_queue_.front();
+            // logger_->trace("audio thread frame queue wait done, queue size
+            // {}",
+            //                audio_queue_.size());
+
+            FramePacket frame = audio_queue_.front();
             audio_queue_.pop_front();
             lock.unlock();
 
-            logger_->trace("audio frame {} ", (void *)audio_pkt->data);
-            HandleAudioFrame(audio_pkt);
-            av_packet_free(&audio_pkt);
+            if (frame.flags == 0) {
+                logger_->trace("audio thread handle frame {}, dts {}, pts{}, "
+                               "queue left {}",
+                               (void *)frame.pkt->data, frame.pkt->dts,
+                               frame.pkt->pts, audio_queue_.size());
+                HandleAudioFrame(frame.pkt);
+                av_packet_free(&frame.pkt);
+            } else {
+                audio_player_->Seek(seek_clock_);
+                logger_->trace("audio decoder is flushed");
+            }
         }
     } catch (std::runtime_error &e) {
         logger_->error("AudioThreadFunc runtime_error, {}", e.what());
@@ -859,6 +1018,10 @@ AVCodecID StreamPlayer::CodecID() const { return stream_->codecpar->codec_id; }
 AVCodecParameters *StreamPlayer::CodecPar() const { return stream_->codecpar; }
 
 AVRational StreamPlayer::TimeBase() { return stream_->time_base; }
+
+long long StreamPlayer::Duration() const { return stream_->duration; }
+
+long long StreamPlayer::Frames() const { return stream_->nb_frames; }
 
 void StreamPlayer::set_codec(const AVCodec *c) { codec_ = c; }
 
@@ -977,11 +1140,11 @@ bool VideoPlayer::InitDecodeContext() {
     logger_->debug("video input stream avg_frame_rate {}, {}",
                    stream_->avg_frame_rate.num, stream_->avg_frame_rate.den);
 
-    // decoder time_base is not equal to stream
-    logger_->info("video input decoder time_base {}, {}",
-                  decode_ctx_->time_base.num, decode_ctx_->time_base.den);
-    logger_->info("video input decoder framerate {}, {}",
-                  decode_ctx_->framerate.num, decode_ctx_->framerate.den);
+    // decoder time_base is unused, normally it is not equal to stream
+    // logger_->info("video input decoder time_base {}, {}",
+    //               decode_ctx_->time_base.num, decode_ctx_->time_base.den);
+    // logger_->info("video input decoder framerate {}, {}",
+    //               decode_ctx_->framerate.num, decode_ctx_->framerate.den);
 
     if (hw_device_ctx_) {
         decode_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
@@ -989,16 +1152,23 @@ bool VideoPlayer::InitDecodeContext() {
         decode_ctx_->get_format = GetHwFormat;
     }
 
-    AVDictionary *codec_opts = nullptr;
+    // AVDictionary *codec_opts = nullptr;
 
-    util::AtExit e([&]() {
-        if (codec_opts) {
-            av_dict_free(&codec_opts);
-        }
-    });
+    // util::AtExit e([&]() {
+    //     if (codec_opts) {
+    //         av_dict_free(&codec_opts);
+    //     }
+    // });
 
-    av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
+    // av_dict_set(&codec_opts, "refcounted_frames", "1", 0);
     //    decode_ctx_->thread_count = 8;
+
+    //		/* Init the decoders, with or without reference counting */
+
+    // without
+    // av_dict_set(&opts, "refcounted_frames", "0", 0);
+    // with
+    //	av_dict_set(&opts, "refcounted_frames", "1", 0);
 
     int err = avcodec_open2(decode_ctx_, codec_, NULL);
     if (err < 0) {
@@ -1007,9 +1177,23 @@ bool VideoPlayer::InitDecodeContext() {
     }
 
     stream_->discard = AVDISCARD_DEFAULT;
-    logger_->info("video decode output fmt {}, resolution {}x{}",
+    // time base is unused
+    logger_->info("video decode time base {}/{}, output fmt {}, resolution "
+                  "{}x{}, framerate {}/{}",
+                  decode_ctx_->time_base.num, decode_ctx_->time_base.den,
                   avutil::GetPixFmtName(decode_ctx_->pix_fmt),
-                  decode_ctx_->width, decode_ctx_->height);
+                  decode_ctx_->width, decode_ctx_->height,
+                  decode_ctx_->framerate.num, decode_ctx_->framerate.den);
+
+    return true;
+}
+
+bool VideoPlayer::FlushDecodeContext() {
+    if (!decode_ctx_)
+        return false;
+
+    avcodec_flush_buffers(decode_ctx_);
+    logger_->info("flushed video decode context");
 
     return true;
 }
@@ -1058,6 +1242,7 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
 
     ts_start_ = util::TimeMilliseconds();
 
+    // 进入解码器的pkt dts递增duration
     int ret = avcodec_send_packet(decode_ctx_, pkt);
     if (AVERROR(EAGAIN) == ret) {
         logger_->error("send packet failure, AVERROR(EAGAIN), input is not "
@@ -1081,7 +1266,8 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
         logger_->error("send packet failure, {}", avutil::ErrorString(ret));
         return false;
     }
-    logger_->trace("avcodec_send_packet ok");
+    logger_->trace("avcodec_send_packet ok, dts {}, pts {}", pkt->dts,
+                   pkt->pts);
 
     while (ret >= 0) {
         ret = avcodec_receive_frame(decode_ctx_, decoded_frame_);
@@ -1096,21 +1282,50 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
             return false;
         }
 
-        ts_decode_ = util::TimeMilliseconds();
-        logger_->trace(
-            "avcodec_receive_frame ok, fmt {}, resolution {}x{}, pts {}, cost "
-            "{}, linesize {}",
-            avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
-            decoded_frame_->width, decoded_frame_->height, decoded_frame_->pts,
-            ts_decode_ - ts_start_, decoded_frame_->linesize[0]);
-
         util::AtExit r([&]() { av_frame_unref(decoded_frame_); });
+
+        auto video_clock = decoded_frame_->pts * av_q2d(stream_->time_base);
+        if (decoded_frame_->pts < seek_pts_) {
+            logger_->debug(
+                "discard received video frame, fmt {}, {}x{}, pkt_dts {}, pts "
+                "{}, clock {}, seek pts {}",
+                avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
+                decoded_frame_->width, decoded_frame_->height,
+                decoded_frame_->pkt_dts, decoded_frame_->pts, video_clock,
+                seek_pts_);
+            return true;
+        }
+
+        ts_decode_ = util::TimeMilliseconds();
+
+        if (decode_pts_delay_ < 0) {
+            // 第一个输出帧对应的触发dts
+            decode_pts_delay_ = decoded_frame_->pkt_dts - decoded_frame_->pts;
+            logger_->info("decode pts delay {}", decode_pts_delay_);
+        }
+
+        // pkt_dts 定义为触发该数据帧的dts， 也就是进入解码器最后一帧的dts
+        logger_->trace(
+            "receive video frame, fmt {}, {}x{}, pkt_dts {}, "
+            "pts {}, clock {}, cost {}, linesize {}, seek pts {}",
+            avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
+            decoded_frame_->width, decoded_frame_->height,
+            decoded_frame_->pkt_dts, decoded_frame_->pts, video_clock,
+            ts_decode_ - ts_start_, decoded_frame_->linesize[0], seek_pts_);
+
+        long long pts_delay = decoded_frame_->pkt_dts - decoded_frame_->pts;
+        if (pts_delay != decode_pts_delay_) {
+            // 当seek的时候，虽然flush了解码器，但是解码后前面几帧pts可能没有在已加入的pkt
+            // pts中，所以会在以前的输出帧pts上累加duration，这时候不匹配，会导致计算clock时间错误。
+            logger_->warn("seek caching frame, pts delay {} mismatches with {}",
+                          pts_delay, decode_pts_delay_);
+            return true;
+        }
 
         AVFrame *data_frame = nullptr;
         if (hw_pix_fmt_ == decoded_frame_->format) {
             logger_->debug(
-                "hw frame {}, color_primaries {}, w {}, h {}, "
-                "yw {}, uw {}, vw {}",
+                "hw frame {}, color {}, w {}, h {}, yw {}, uw {}, vw {}",
                 avutil::GetPixFmtName((AVPixelFormat)decoded_frame_->format),
                 avutil::GetColorPrimariesName(decoded_frame_->color_primaries),
                 decoded_frame_->width, decoded_frame_->height,
@@ -1140,8 +1355,8 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
                 data_frame->height = decoded_frame_->height;
 
                 logger_->debug(
-                    "mapped frame {}, color_primaries {}, w {}, h {}, "
-                    "yw {}, uw {}, vw {}",
+                    "mapped frame {}, color {}, w {}, h {}, yw {}, uw {}, vw "
+                    "{}",
                     av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
                     data_frame->color_primaries, data_frame->width,
                     data_frame->height, data_frame->linesize[0],
@@ -1155,19 +1370,20 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
                 }
 
                 ts_hw_ = util::TimeMilliseconds();
-                logger_->debug("transfer cost {}", ts_hw_ - ts_decode_);
 
-                // pts需要设置
+                // pts需要显示设置
                 data_frame->pts = decoded_frame_->pts;
+                data_frame->pkt_dts = decoded_frame_->pkt_dts;
 
                 logger_->debug(
-                    "transfer frame {}, color_primaries {}, w {}, h {}, "
-                    "yw {}, uw {}, vw {}, pts {}",
+                    "transfer frame pts {} cost {}, fmt {}, color {}, w {}, h "
+                    "{}, yw {}, uw {}, vw {}",
+                    data_frame->pts, ts_hw_ - ts_decode_,
                     av_get_pix_fmt_name((AVPixelFormat)data_frame->format),
                     avutil::GetColorPrimariesName(data_frame->color_primaries),
                     data_frame->width, data_frame->height,
                     data_frame->linesize[0], data_frame->linesize[1],
-                    data_frame->linesize[2], data_frame->pts);
+                    data_frame->linesize[2]);
             }
 
         } else {
@@ -1218,8 +1434,6 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
             ts_cb_ = util::TimeMilliseconds();
             logger_->debug("handle frame cost {}", ts_cb_ - ts_start_);
 
-            auto video_clock = data_frame->pts * av_q2d(stream_->time_base);
-
             frame_cb_(data_frame, video_clock);
         }
 
@@ -1229,6 +1443,15 @@ bool VideoPlayer::HandleFrame(AVPacket *pkt) {
     }
 
     return true;
+}
+
+void VideoPlayer::Seek(double clock) {
+    // https://blog.csdn.net/weiwei9363/article/details/132307253
+    FlushDecodeContext();
+    logger_->info("video decoder is flushed");
+
+    seek_pts_ = (long long)(clock / av_q2d(TimeBase()));
+    logger_->info("video seek pts {}", seek_pts_);
 }
 
 AudioPlayer::AudioPlayer(int index, AVStream *stream)
@@ -1259,7 +1482,8 @@ void AudioPlayer::set_resample_format(AudioFormat fmt) { resample_fmt_ = fmt; }
 void AudioPlayer::LogInput() {
     auto audio_codecpar = stream_->codecpar;
     logger_->info(
-        "input streams audio index = {}, codec id {}, sample fmt {}, sample "
+        "input streams audio index = {}, codec id {}, sample fmt {}, "
+        "sample "
         "rate {}, channels {}, bits per sample {}, time_base {}/{}",
         index_, avutil::GetCodecName(audio_codecpar->codec_id),
         avutil::GetSampleFmtName((AVSampleFormat)audio_codecpar->format),
@@ -1299,6 +1523,8 @@ bool AudioPlayer::InitDecodeContext() {
     }
 }
 
+bool AudioPlayer::FlushDecodeContext() { return true; }
+
 bool AudioPlayer::HandleFrame(AVPacket *pkt) {
     if (!pkt || pkt->size <= 0)
         return false;
@@ -1329,7 +1555,7 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
         logger_->error("send packet failure, {}", avutil::ErrorString(ret));
         return false;
     }
-    logger_->trace("audio avcodec_send_packet ok");
+    // logger_->trace("audio avcodec_send_packet ok");
 
     while (ret >= 0) {
         ret = avcodec_receive_frame(decode_ctx_, decoded_frame_);
@@ -1346,13 +1572,29 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
 
         util::AtExit r([&]() { av_frame_unref(decoded_frame_); });
 
+        double clock = decoded_frame_->pts * av_q2d(stream_->time_base);
+
+        if (decoded_frame_->pts < seek_pts_) {
+            logger_->debug(
+                "discard received audio frame, sample fmt {}, sample rate {}, "
+                "channels {}, nb_samples {}, duration {}, pts {}, clock {:f}, "
+                "seek pts {}",
+                avutil::GetSampleFmtName(
+                    (AVSampleFormat)decoded_frame_->format),
+                decoded_frame_->sample_rate,
+                decoded_frame_->ch_layout.nb_channels,
+                decoded_frame_->nb_samples, decoded_frame_->duration,
+                decoded_frame_->pts, clock, seek_pts_);
+            return true;
+        }
+
         logger_->trace(
-            "audio avcodec_receive_frame ok, sample fmt {}, sample rate {}, "
-            "channels {}, nb_samples {}, duration {}, pts {}",
+            "receive audio frame, sample fmt {}, sample rate {}, "
+            "channels {}, nb_samples {}, duration {}, pts {}, clock {:f}",
             avutil::GetSampleFmtName((AVSampleFormat)decoded_frame_->format),
             decoded_frame_->sample_rate, decoded_frame_->ch_layout.nb_channels,
             decoded_frame_->nb_samples, decoded_frame_->duration,
-            decoded_frame_->pts);
+            decoded_frame_->pts, clock);
 
         // https://www.cnblogs.com/zjacky/p/16529648.html 可以写入AVFrame
 
@@ -1370,9 +1612,9 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             auto resample_buf_size = av_samples_get_buffer_size(
                 nullptr, resample_fmt_.channel_count, out_count,
                 (AVSampleFormat)resample_fmt_.sample_fmt, 0);
-            logger_->trace(
-                "out count {}, av_samples_get_buffer_size out size {} ",
-                out_count, resample_buf_size);
+            // logger_->trace(
+            //     "out count {}, av_samples_get_buffer_size out size {} ",
+            //     out_count, resample_buf_size);
 
             uint8_t *resample_buf = new uint8_t[resample_buf_size];
 
@@ -1381,8 +1623,8 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             //        int audio_buf_len =
             //            av_samples_alloc(&audio_buf, nullptr,
             //            resample_fmt_.channel_count,
-            //                             out_count, resample_fmt_.sample_fmt,
-            //                             0);
+            //                             out_count,
+            //                             resample_fmt_.sample_fmt, 0);
             //        logger_->trace("av_samples_alloc nb_samples {},
             //        audio_buf_len
             //        {}",
@@ -1397,10 +1639,11 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             // swr_convert_frame。输出重采样之后，每帧的采样数
             int resample_nb_samples = swr_convert(
                 swr_ctx_, &resample_buf, resample_buf_size, in_data, in_count);
-            logger_->trace("resample nb_samples {}", resample_nb_samples);
+            // logger_->trace("resample nb_samples {}", resample_nb_samples);
             if (resample_nb_samples < 0) {
                 logger_->error("swr_convert error, {}",
                                avutil::ErrorString(resample_nb_samples));
+                delete[] resample_buf;
                 return false;
             }
 
@@ -1408,30 +1651,32 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
                 resample_nb_samples * resample_fmt_.channel_count *
                 av_get_bytes_per_sample(
                     (AVSampleFormat)resample_fmt_.sample_fmt);
-            logger_->trace("resample frame size {}", resample_frame_size);
+            logger_->trace("resample nb_samples {}, frame size {}",
+                           resample_nb_samples, resample_frame_size);
 
-            double clock = decoded_frame_->pts * av_q2d(stream_->time_base);
-            logger_->debug("audio frame pts {}, clock {}", decoded_frame_->pts,
-                           clock);
             if (frame_cb_) {
-                logger_->debug("frame_cb_ {}, {}, {}", (void *)resample_buf,
-                               resample_frame_size, clock);
+                // logger_->debug("frame_cb_ {}, size {}, clock {:f}",
+                //                (void *)resample_buf, resample_frame_size,
+                //                clock);
                 frame_cb_((const char *)resample_buf, resample_frame_size,
                           clock);
             }
             delete[] resample_buf;
 
-            double frame_interval = (double)decoded_frame_->nb_samples /
-                                    decoded_frame_->sample_rate;
+            // 不延迟，让设备端去延迟
+            // if (!seeking_) {
+            // double frame_interval = (double)decoded_frame_->nb_samples /
+            //                         decoded_frame_->sample_rate;
 
-            int sleeptime =
-                frame_interval * 1000000 *
-                0.7; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
+            // long long sleeptime =
+            //     frame_interval * 1000000 *
+            //     0.7; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
 
-            logger_->trace("frame_interval {}, sleep {}", frame_interval,
-                           sleeptime);
-            // FIXME:
-            std::this_thread::sleep_for(std::chrono::microseconds(sleeptime));
+            // logger_->trace("frame_interval {}, sleep {}", frame_interval,
+            //                sleeptime);
+            // // FIXME:
+            // std::this_thread::sleep_for(std::chrono::microseconds(sleeptime));
+            // }
 
             /*
         // 转码音频帧
@@ -1471,6 +1716,11 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
     }
 
     return true;
+}
+
+void AudioPlayer::Seek(double clock) {
+    seek_pts_ = (long long)(clock / av_q2d(TimeBase()));
+    logger_->info("audio seek pts {}", seek_pts_);
 }
 
 bool AudioPlayer::InitSwrContext() {
@@ -1516,10 +1766,11 @@ bool AudioPlayer::InitSwrContext() {
     /* set options */
     //    av_opt_set_chlayout(swr_ctx_, "in_chlayout", &src_ch_layout, 0);
     //    av_opt_set_int(swr_ctx_, "in_sample_rate", src_rate, 0);
-    //    av_opt_set_sample_fmt(swr_ctx_, "in_sample_fmt", src_sample_fmt, 0);
-    //    av_opt_set_chlayout(swr_ctx_, "out_chlayout", &dst_ch_layout, 0);
-    //    av_opt_set_int(swr_ctx_, "out_sample_rate", dst_rate, 0);
-    //    av_opt_set_sample_fmt(swr_ctx_, "out_sample_fmt", dst_sample_fmt, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "in_sample_fmt", src_sample_fmt,
+    //    0); av_opt_set_chlayout(swr_ctx_, "out_chlayout", &dst_ch_layout,
+    //    0); av_opt_set_int(swr_ctx_, "out_sample_rate", dst_rate, 0);
+    //    av_opt_set_sample_fmt(swr_ctx_, "out_sample_fmt", dst_sample_fmt,
+    //    0);
 
     /* initialize the resampling context */
     if ((ret = swr_init(swr_ctx_)) < 0) {
