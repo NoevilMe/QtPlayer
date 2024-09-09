@@ -282,7 +282,7 @@ bool PlayerForm::openMedia(MediaSource media) {
             return false;
         }
 
-        speaker.reset(new AudioSpeaker(true));
+        speaker.reset(new AudioSpeaker(false));
 
         player->SetAudioFrameCallback(
             std::bind(&PlayerForm::playAudio, this, std::placeholders::_1,
@@ -467,7 +467,6 @@ void PlayerForm::stopPlayer() {
 void PlayerForm::stopSpeaker() {
     if (speaker) {
         qDebug() << QThread::currentThreadId() << "reset speaker ...";
-        speaker->stop();
         speaker.reset();
     }
 }

@@ -1664,54 +1664,19 @@ bool AudioPlayer::HandleFrame(AVPacket *pkt) {
             delete[] resample_buf;
 
             // 不延迟，让设备端去延迟
-            // if (!seeking_) {
-            // double frame_interval = (double)decoded_frame_->nb_samples /
-            //                         decoded_frame_->sample_rate;
+            double frame_interval = (double)decoded_frame_->nb_samples /
+                                    decoded_frame_->sample_rate;
 
-            // long long sleeptime =
-            //     frame_interval * 1000000 *
-            //     0.7; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
+            long long sleeptime =
+                frame_interval * 1000000 *
+                0.8; // 延迟时间不能超过帧间间隔，写入数据也会有等待机制
 
-            // logger_->trace("frame_interval {}, sleep {}", frame_interval,
-            //                sleeptime);
-            // // FIXME:
-            // std::this_thread::sleep_for(std::chrono::microseconds(sleeptime));
-            // }
-
-            /*
-        // 转码音频帧
-        // 计算转码后的音频数据大小
-        int dstNbSamples = av_rescale_rnd(swr_get_delay(swrCtx, 44100) +
-        aacFrame->nb_samples, 44100, 44100, AV_ROUND_UP); int
-        dstBufferSize = av_samples_get_buffer_size(nullptr, 2,
-        dstNbSamples, AV_SAMPLE_FMT_S16, 0);
-
-        // 分配转码后的音频数据缓冲区
-        uint8_t *dstBuffer = static_cast<uint8_t
-        *>(av_malloc(dstBufferSize));
-
-        // 进行音频转码
-        int numSamples = swr_convert(audioSwsContext, &dstBuffer,
-        dstNbSamples, const_cast<const uint8_t **>(pAudioFrame->data),
-        pAudioFrame->nb_samples); if (numSamples < 0) { qDebug() <<
-        "音频转码失败"; av_freep(&dstBuffer);
-        }
-        else{
-            // 释放资源
-            // 将音频帧数据写入音频输出设备
-            outputDevice->write((const char *)dstBuffer, dstBufferSize);
-        }
-
-        // 计算音频帧播放时长
-        AVRational timeBase =
-        pFormatContext->streams[audioStream]->time_base; int64_t pts =
-        av_frame_get_best_effort_timestamp(pAudioFrame); double time =
-        av_q2d(timeBase) * pts;
-
-        // 延时播放下一帧
-        QEventLoop loop;
-        QTimer::singleShot(time * 1000, &loop, [&]() { loop.quit(); });
-        loop.exec(); */
+            logger_->trace("frame_interval {}, sleep {}", frame_interval,
+                           sleeptime);
+            // FIXME:
+            std::this_thread::sleep_for(std::chrono::microseconds(sleeptime));
+        } else {
+            logger_->critical("not implemented!");
         }
     }
 
