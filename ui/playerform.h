@@ -64,6 +64,8 @@ private slots:
     // QWidget interface
     void on_horSliderProgress_valueChanged(int value);
 
+    void on_pushButtonFullScreen_clicked(bool checked);
+
 protected:
     void mousePressEvent(QMouseEvent *event) override;
 
@@ -91,6 +93,8 @@ private:
     QString formatTimestamp(int seconds, bool longFmt);
     void clearTimestamp();
 
+    void toggleFullScreen(bool fullScreen);
+
 private:
     Ui::PlayerForm *ui;
 
@@ -109,6 +113,14 @@ private:
     int volume = 0;
 
     std::function<void(const QString &)> windowTitleCb;
+
+    QWidget *glParent;
+    Qt::WindowFlags glFlags;
+
+    QTimer *timerCheckControlPane; // 用于控制控制界面的出现和隐藏
+    QPropertyAnimation *aniControlPane; // 控制底部控制控件的出现和隐藏
+    void showControlPane();             // 显示底部控制控件
+    void hideControlPane();             // 隐藏底部控制控件
 
     std::unique_ptr<AudioSpeaker> speaker;
     std::unique_ptr<FFPlayer> player;

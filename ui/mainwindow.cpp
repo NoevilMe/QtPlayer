@@ -26,6 +26,8 @@ MainWindow::MainWindow(QWidget *parent)
     switchWindowType(curWinType);
 
     loadStyleSheet(Light);
+
+    // menuWidget()->hide();
 }
 
 MainWindow::~MainWindow() { delete ui; }

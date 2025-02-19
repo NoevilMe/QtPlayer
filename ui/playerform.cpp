@@ -8,6 +8,7 @@
 #include <QStyle>
 #include <QTimer>
 
+#include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -163,6 +164,10 @@ PlayerForm::PlayerForm(QWidget *parent)
             &PlayerForm::slotProgressChanged);
 
     qDebug() << "PlayerForm" << QThread::currentThreadId();
+
+    // ui->widgetControlPane->hide();
+    // toggleFullScreen(true);
+    aniControlPane = new QPropertyAnimation(ui->widgetControlPane, "geometry");
 }
 
 PlayerForm::~PlayerForm() {
@@ -533,6 +538,113 @@ void PlayerForm::clearTimestamp() {
     ui->labelTotalTime->setText(nullTs);
 }
 
+void PlayerForm::toggleFullScreen(bool fullScreen) {
+    auto screens = QGuiApplication::screens();
+    for (auto &sc : screens) {
+        qDebug() << "screen" << sc->serialNumber() << sc->model()
+                 << sc->geometry() << sc->manufacturer();
+    }
+
+    qDebug() << this->geometry();
+
+    auto curScreen = this->screen();
+    qDebug() << curScreen;
+    qDebug() << "current screen" << curScreen->serialNumber()
+             << curScreen->model() << curScreen->geometry()
+             << curScreen->manufacturer();
+
+    auto selScreen = screens[2];
+    qDebug() << "select screen" << selScreen->serialNumber()
+             << selScreen->model() << selScreen->geometry()
+             << selScreen->manufacturer();
+
+    QWidget *ctl = ui->widget;
+
+    if (fullScreen) {
+        // 方法1
+        // https://stackoverflow.com/questions/12338548/qt-widget-temporarily-fullscreen
+        // glParent = (QWidget *)ui->openGLWidget->parent();
+        // glFlags = ui->openGLWidget->windowFlags();
+
+        // ui->openGLWidget->setParent(nullptr);
+        // ui->openGLWidget->setWindowFlags(Qt::FramelessWindowHint |
+        //                                  Qt::WindowStaysOnTopHint);
+        // ui->openGLWidget->showMaximized();
+        // auto geo = curScreen->geometry();
+        // ui->openGLWidget->parent();
+        // ui->openGLWidget->setWindowFlags(Qt::Window);
+        // // ui->openGLWidget->move(geo.x(), geo.y());
+        // ui->openGLWidget->setGeometry(geo);
+        // ui->openGLWidget->setScreen(curScreen);
+        // ui->openGLWidget->showFullScreen();
+        // ui->openGLWidget->setGeometry(curScreen->geometry());
+
+        // ui->openGLWidget->showFullScreen();
+
+        // 方法2
+        glFlags = ctl->windowFlags();
+        ctl->setWindowFlags(Qt::Window | glFlags);
+
+        // ui->openGLWidget->setWindowState(Qt::WindowFullScreen);
+        // ui->openGLWidget->resize(2560, 1440);
+        // ui->openGLWidget->move(-316, -1440);
+        // ui->openGLWidget->setWindowState(
+        //     (ui->openGLWidget->windowState() &
+        //      ~(Qt::WindowMinimized | Qt::WindowMaximized)) |
+        //     Qt::WindowFullScreen);
+
+        // ui->openGLWidget->resize(1920, 1080);
+        // ui->openGLWidget->move(2240, 0);
+        ctl->setGeometry(selScreen->geometry());
+        ctl->show();
+
+        hideControlPane();
+
+        // ui->openGLWidget->showFullScreen();
+
+        //
+        // 移动到左上角
+        // resize(QApplication::desktop()->availableGeometry().size());
+
+        // 方法3，无用
+        /* glFlags = ui->openGLWidget->windowFlags();
+        ui->openGLWidget->setWindowFlags(Qt::Window | glFlags);
+        ui->openGLWidget->setScreen(selScreen);
+        ui->openGLWidget->showFullScreen();*/
+    } else {
+        // 方法1
+        // ui->openGLWidget->setParent(glParent);
+        // ui->openGLWidget->setWindowFlags(glFlags);
+        // // ui->openGLWidget->setWindowFlags(Qt::SubWindow);
+        // // ui->openGLWidget->showNormal();
+        // // ui->openGLWidget->showNormal();
+        // ui->openGLWidget->show();
+
+        // 方法2
+        ctl->setWindowFlags(glFlags);
+        ctl->showNormal();
+    }
+}
+
+void PlayerForm::showControlPane() {}
+
+void PlayerForm::hideControlPane() {
+    aniControlPane->setTargetObject(ui->widgetControlPane);
+
+    aniControlPane->setDuration(800);
+
+    int w = ui->widgetControlPane->width();
+    int h = ui->widgetControlPane->height();
+    int x = 0;
+    int y = ui->widget->height() + h;
+
+    aniControlPane->setStartValue(ui->widgetControlPane->geometry());
+    aniControlPane->setEndValue(QRect(x, y, w, h));
+    aniControlPane->setEasingCurve(QEasingCurve::Linear); // 设置动画效果
+
+    aniControlPane->start();
+}
+
 // bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
 //    if (fsWidget_ != nullptr && watched == fsWidget_ &&
 //        event->type() == QEvent::KeyPress) {
@@ -724,4 +836,12 @@ void PlayerForm::on_horSliderProgress_sliderMoved(int position) {
 
 void PlayerForm::on_horSliderProgress_valueChanged(int value) {
     qDebug() << "on_horSliderProgress_valueChanged" << value;
+}
+
+void PlayerForm::on_pushButtonFullScreen_clicked(bool checked) {
+    // https://blog.csdn.net/gdizcm/article/details/131649492
+    // https://blog.csdn.net/bai2010bingbing/article/details/91378903
+    // https://www.cnblogs.com/wuhanpjf/p/11247770.html
+    // https://www.cnblogs.com/lvdongjie/p/3758025.html
+    toggleFullScreen(checked);
 }
